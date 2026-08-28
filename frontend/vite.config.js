@@ -7,4 +7,26 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
+  server: {
+    host: '0.0.0.0',
+    port: 5173,
+    proxy: {
+      '/tasks': 'http://localhost:8000',
+      '/users': 'http://localhost:8000',
+      '/login': 'http://localhost:8000',
+      '/register': 'http://localhost:8000',
+      '/auth': 'http://localhost:8000',
+      '/wallet': 'http://localhost:8000',
+      '/monetization': 'http://localhost:8000',
+      '/payments': 'http://localhost:8000',
+      '/files': 'http://localhost:8000',
+      '/uploads': 'http://localhost:8000',
+      '/notifications': 'http://localhost:8000',
+      '/ai': 'http://localhost:8000',
+      '/ws': {
+        target: 'ws://localhost:8000',
+        ws: true,
+      },
+    },
+  },
 })
