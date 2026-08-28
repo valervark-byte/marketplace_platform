@@ -5,16 +5,14 @@ from app.models import UserRole, TaskStatus, TaskCategory, TransactionType
 class UserCreate(BaseModel):
     email: EmailStr
     password: str
-    role: UserRole
+    role: UserRole = UserRole.customer
     name: Optional[str] = None
 
     @field_validator("password")
     @classmethod
     def _password_policy(cls, v: str) -> str:
-        if len(v) < 8:
-            raise ValueError("Пароль должен быть не короче 8 символов")
-        if v.isdigit() or v.isalpha():
-            raise ValueError("Пароль должен содержать и буквы, и цифры")
+        if len(v) < 6:
+            raise ValueError("Пароль должен содержать минимум 6 символов")
         return v
 
 class UserOut(BaseModel):
@@ -56,10 +54,8 @@ class ResetPasswordRequest(BaseModel):
     @field_validator("new_password")
     @classmethod
     def _password_policy(cls, v: str) -> str:
-        if len(v) < 8:
-            raise ValueError("Пароль должен быть не короче 8 символов")
-        if v.isdigit() or v.isalpha():
-            raise ValueError("Пароль должен содержать и буквы, и цифры")
+        if len(v) < 6:
+            raise ValueError("Пароль должен содержать минимум 6 символов")
         return v
 
 class TaskCreate(BaseModel):

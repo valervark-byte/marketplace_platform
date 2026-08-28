@@ -42,15 +42,21 @@ def decode_token(token: str) -> dict:
 # In-memory Rate Limiter
 _rate_buckets: Dict[str, List[float]] = {}
 
-def rate_limit(request: Request, bucket: str, limit: int, window_sec: int):
-    ip = request.client.host if request.client else "unknown"
+def rate_limit(request: Request, bucket: str, limit: int = 60, window_sec: int = 60):
+    # Retrieve real client IP from headers or client
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        ip = forwarded.split(",")[0].strip()
+    else:
+        ip = request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
+    
     key = f"{bucket}:{ip}"
     now = time.time()
     hits = [t for t in _rate_buckets.get(key, []) if now - t < window_sec]
     if len(hits) >= limit:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Слишком много запросов, пожалуйста, попробуйте позже"
+            detail="Слишком много запросов, пожалуйста, повторите попытку через минуту"
         )
     hits.append(now)
     _rate_buckets[key] = hits
