@@ -52,8 +52,11 @@ def save_subs(subs):
 def fetch_new_tasks(last_id):
     """Возвращает заказы с id больше last_id (или последний максимум, если бот только запущен)."""
     try:
-        with urllib.request.urlopen(f"{API_BASE}/tasks/", timeout=30) as r:
-            tasks = json.loads(r.read().decode("utf-8"))
+        # limit — берём страницу свежих заказов (id desc), не тянем всю таблицу
+        with urllib.request.urlopen(f"{API_BASE}/tasks/?sort=new&limit=50", timeout=30) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        # /tasks/ отдаёт список; на случай будущей смены формата поддержим и {"tasks": [...]}
+        tasks = data.get("tasks", []) if isinstance(data, dict) else data
     except Exception as e:
         print("tasks fetch error:", e)
         return [], last_id

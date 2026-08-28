@@ -709,6 +709,7 @@ const TaskPage = () => {
     const [proposedPrice, setProposedPrice] = useState('');
     const [estimatedDays, setEstimatedDays] = useState('');
     const [sending, setSending] = useState(false);
+    const [confirmingDeleteImage, setConfirmingDeleteImage] = useState(null);
 
     const fetchTask = () => {
         setLoading(true);
@@ -763,6 +764,8 @@ const TaskPage = () => {
             fetchTask();
         } catch (err) {
             toast.error(err.response?.data?.detail || 'Не удалось удалить фото');
+        } finally {
+            setConfirmingDeleteImage(null);
         }
     };
 
@@ -834,7 +837,7 @@ const TaskPage = () => {
                                     />
                                     {isOwner && (
                                         <button
-                                            onClick={() => handleDeleteImage(img)}
+                                            onClick={() => setConfirmingDeleteImage(img)}
                                             title="Удалить фото"
                                             className="absolute -top-2 -right-2 bg-danger text-white w-7 h-7 rounded-full font-extrabold text-sm flex items-center justify-center transition hover:scale-110"
                                         >×</button>
@@ -1123,10 +1126,13 @@ const Feed = () => {
     const [cityFilter, setCityFilter] = useState('');
     const [remoteOnly, setRemoteOnly] = useState(false);
     const [viewMode, setViewMode] = useState('list'); // 'list' or 'map'
-    const [sortBy, setSortBy] = useState('default');
+    const [sortBy, setSortBy] = useState('new');
+    const [statusFilter, setStatusFilter] = useState('');
     const [loading, setLoading] = useState(true);
+    const [loadingMore, setLoadingMore] = useState(false);
     const [connError, setConnError] = useState(false);
-    const [visibleCount, setVisibleCount] = useState(12);
+    const [total, setTotal] = useState(0);
+    const [unread, setUnread] = useState({ total: 0, by_task: {} });
     const [lightbox, setLightbox] = useState(null); // { images: [], index: n }
     const [confirmingComplete, setConfirmingComplete] = useState(false);
 
@@ -1160,25 +1166,52 @@ const Feed = () => {
     const [reviewHover, setReviewHover] = useState(0);
     const [reviewComment, setReviewComment] = useState('');
 
-    const fetchTasks = () => {
-        setLoading(true);
+    const PAGE_SIZE = 12;
+
+    const buildTaskParams = (offset) => {
         const params = new URLSearchParams();
         if (categoryFilter) params.append('category', categoryFilter);
         if (searchQuery) params.append('search', searchQuery);
         if (cityFilter) params.append('city', cityFilter);
         if (remoteOnly) params.append('is_remote', 'true');
+        if (statusFilter) params.append('status', statusFilter);
+        params.append('sort', sortBy);
+        params.append('limit', String(PAGE_SIZE));
+        params.append('offset', String(offset));
+        return params;
+    };
 
-        axios.get(`${API_URL}/tasks/?${params.toString()}`)
+    const fetchTasks = () => {
+        setLoading(true);
+        axios.get(`${API_URL}/tasks/?${buildTaskParams(0).toString()}`)
             .then(res => {
                 setTasks(res.data);
+                setTotal(parseInt(res.headers['x-total-count'] || res.data.length, 10));
                 setConnError(false);
-                setVisibleCount(12);
             })
             .catch(err => {
                 console.error("Error fetching tasks:", err);
                 if (!err.response) setConnError(true);
             })
             .finally(() => setLoading(false));
+    };
+
+    const loadMoreTasks = () => {
+        setLoadingMore(true);
+        axios.get(`${API_URL}/tasks/?${buildTaskParams(tasks.length).toString()}`)
+            .then(res => {
+                setTasks(prev => [...prev, ...res.data]);
+                setTotal(parseInt(res.headers['x-total-count'] || tasks.length, 10));
+            })
+            .catch(err => console.error("Error loading more tasks:", err))
+            .finally(() => setLoadingMore(false));
+    };
+
+    const fetchUnread = () => {
+        if (!token) return;
+        axios.get(`${API_URL}/chats/unread`, { headers: { Authorization: `Bearer ${token}` } })
+            .then(res => setUnread(res.data))
+            .catch(() => {});
     };
 
     // Debounce the search box so typing doesn't hit the API on every keystroke
@@ -1189,7 +1222,21 @@ const Feed = () => {
 
     useEffect(() => {
         fetchTasks();
-    }, [categoryFilter, searchQuery, cityFilter, remoteOnly]);
+    }, [categoryFilter, searchQuery, cityFilter, remoteOnly, statusFilter, sortBy]);
+
+    // Подтягиваем счётчики непрочитанного при входе в ленту и после закрытия чата
+    useEffect(() => {
+        fetchUnread();
+    }, [token]);
+
+    // Живой бейдж: периодически обновляем счётчики, пока чат закрыт и вкладка активна
+    useEffect(() => {
+        if (!token) return;
+        const id = setInterval(() => {
+            if (!chatTask && document.visibilityState === 'visible') fetchUnread();
+        }, 30000);
+        return () => clearInterval(id);
+    }, [token, chatTask]);
 
     const fetchMessages = async (taskId) => {
         try {
@@ -1228,15 +1275,26 @@ const Feed = () => {
                 if (prev.find(m => m.id === incomingMessage.id)) return prev;
                 return [...prev, incomingMessage];
             });
+            // Чат открыт — сразу помечаем прочитанным на сервере
+            axios.post(`${API_URL}/tasks/${chatTask.id}/chat/read`, {}, { headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
         };
 
         ws.onclose = () => console.log("WebSocket disconnected");
+
+        // Открытие чата: локально гасим бейдж и обновляем счётчики с сервера
+        setUnread(prev => {
+            const by = { ...prev.by_task };
+            const removed = by[chatTask.id] || 0;
+            delete by[chatTask.id];
+            return { total: Math.max(0, prev.total - removed), by_task: by };
+        });
 
         return () => {
             if (wsRef.current) {
                 wsRef.current.close();
                 wsRef.current = null;
             }
+            fetchUnread();
         };
     }, [chatTask, token]);
 
@@ -1427,15 +1485,24 @@ const Feed = () => {
                     </label>
                     <div className="flex gap-3 items-stretch flex-wrap">
                         <select
-                            className="h-[50px] flex-1 min-w-[150px] lg:flex-none rounded-xl border border-border bg-surface-2 text-ink px-3 font-semibold outline-none focus:border-accent transition cursor-pointer"
+                            className="h-[50px] flex-1 min-w-[130px] lg:flex-none rounded-xl border border-border bg-surface-2 text-ink px-3 font-semibold outline-none focus:border-accent transition cursor-pointer"
+                            value={statusFilter}
+                            onChange={(e) => setStatusFilter(e.target.value)}
+                        >
+                            <option value="">Все статусы</option>
+                            <option value="open">Открытые</option>
+                            <option value="in_progress">В работе</option>
+                            <option value="completed">Завершённые</option>
+                        </select>
+                        <select
+                            className="h-[50px] flex-1 min-w-[130px] lg:flex-none rounded-xl border border-border bg-surface-2 text-ink px-3 font-semibold outline-none focus:border-accent transition cursor-pointer"
                             value={sortBy}
                             onChange={(e) => setSortBy(e.target.value)}
                         >
-                            <option value="default">По умолчанию</option>
+                            <option value="new">Сначала новые</option>
+                            <option value="old">Сначала старые</option>
                             <option value="budget_desc">Бюджет ↓</option>
                             <option value="budget_asc">Бюджет ↑</option>
-                            <option value="newest">Сначала новые</option>
-                            <option value="oldest">Сначала старые</option>
                         </select>
                         <button
                             onClick={() => setViewMode('list')}
@@ -1458,7 +1525,7 @@ const Feed = () => {
                 <div className="flex justify-between items-center mb-6 gap-4 flex-wrap">
                     <h2 className="font-display font-bold uppercase text-xl md:text-2xl flex items-center gap-3">
                         Лента заказов
-                        <span className="rounded-full bg-surface-2 border border-border text-muted text-xs font-bold px-2.5 py-0.5">{tasks.length}</span>
+                        <span className="rounded-full bg-surface-2 border border-border text-muted text-xs font-bold px-2.5 py-0.5">{total}</span>
                     </h2>
                     {role === 'customer' && (
                         <button onClick={() => setShowCreateModal(true)} className={btnPrimary}>+ Создать заказ</button>
@@ -1500,13 +1567,7 @@ const Feed = () => {
                                 <p className="text-muted mt-2 font-semibold">Заказов по этим фильтрам не найдено — попробуйте изменить условия.</p>
                             </div>
                         ) : (
-                            [...tasks].sort((a, b) => {
-                                if (sortBy === 'budget_desc') return (b.budget || 0) - (a.budget || 0);
-                                if (sortBy === 'budget_asc') return (a.budget || 0) - (b.budget || 0);
-                                if (sortBy === 'newest') return new Date(b.created_at || 0) - new Date(a.created_at || 0);
-                                if (sortBy === 'oldest') return new Date(a.created_at || 0) - new Date(b.created_at || 0);
-                                return 0;
-                            }).slice(0, visibleCount).map(t => (
+                            tasks.map(t => (
                                 <article key={t.id} className="glass rounded-2xl p-5 flex flex-col transition duration-150 hover:border-accent/50 hover:shadow-card">
                                     <div className="flex items-center justify-between gap-3">
                                         <span className="rounded-full bg-surface-2 border border-border text-ink text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 truncate">{getCategoryLabel(t.category)}</span>
@@ -1552,7 +1613,12 @@ const Feed = () => {
                                             <button onClick={() => setSelectedTask(t)} className={btnPrimary}>Откликнуться</button>
                                         )}
                                         {role === 'specialist' && t.status === 'in_progress' && t.executor_id === parseInt(jwtDecode(token).sub) && (
-                                            <button onClick={() => setChatTask(t)} className={btnSignal}>Рабочая область</button>
+                                            <button onClick={() => setChatTask(t)} className={`${btnSignal} relative`}>
+                                                Рабочая область
+                                                {unread.by_task[t.id] > 0 && (
+                                                    <span className="absolute -top-2 -right-2 min-w-[20px] h-5 px-1.5 rounded-full bg-danger text-white text-[11px] font-bold flex items-center justify-center">{unread.by_task[t.id]}</span>
+                                                )}
+                                            </button>
                                         )}
                                         {role === 'customer' && t.customer_id === parseInt(jwtDecode(token).sub) && (
                                             <div className="flex gap-2 flex-wrap">
@@ -1560,7 +1626,12 @@ const Feed = () => {
                                                     <button onClick={() => loadResponses(t.id)} className={btnGhost}>Смотреть отклики</button>
                                                 )}
                                                 {t.status === 'in_progress' && (
-                                                    <button onClick={() => setChatTask(t)} className={btnSignal}>Перейти в чат</button>
+                                                    <button onClick={() => setChatTask(t)} className={`${btnSignal} relative`}>
+                                                        Перейти в чат
+                                                        {unread.by_task[t.id] > 0 && (
+                                                            <span className="absolute -top-2 -right-2 min-w-[20px] h-5 px-1.5 rounded-full bg-danger text-white text-[11px] font-bold flex items-center justify-center">{unread.by_task[t.id]}</span>
+                                                        )}
+                                                    </button>
                                                 )}
                                                 {t.status === 'completed' && (
                                                     <button onClick={() => setReviewingTask(t)} className={btnGhost}>★ Отзыв о специалисте</button>
@@ -1577,10 +1648,10 @@ const Feed = () => {
                     </div>
                 )}
 
-                {!loading && !connError && viewMode === 'list' && tasks.length > visibleCount && (
+                {!loading && !connError && viewMode === 'list' && tasks.length < total && (
                     <div className="mt-6 text-center">
-                        <button onClick={() => setVisibleCount(c => c + 12)} className={btnGhost}>
-                            Показать ещё · {tasks.length - visibleCount}
+                        <button onClick={loadMoreTasks} disabled={loadingMore} className={btnGhost}>
+                            {loadingMore ? 'Загрузка…' : `Показать ещё · ${total - tasks.length}`}
                         </button>
                     </div>
                 )}

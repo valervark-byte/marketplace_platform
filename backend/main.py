@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, UploadFile, File, Request
+from fastapi import FastAPI, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, UploadFile, File, Request, BackgroundTasks
 from fastapi.responses import Response as FastResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
@@ -147,6 +147,7 @@ class Task(Base):
     deadline = Column(String, nullable=True)
     is_remote = Column(Boolean, default=False)
     images = Column(Text, nullable=True)  # JSON string with image URLs
+    created_at = Column(String, default=lambda: datetime.utcnow().isoformat())
 
 class Message(Base):
     __tablename__ = "messages"
@@ -165,6 +166,14 @@ class Review(Base):
     rating = Column(Integer)
     comment = Column(String, nullable=True)
     target = Column(String, default="specialist")  # specialist | customer — кому отзыв
+
+class ChatRead(Base):
+    """Отметка «докуда пользователь прочитал чат по задаче» — для счётчиков непрочитанного"""
+    __tablename__ = "chat_reads"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
+    task_id = Column(Integer, index=True)
+    last_read_message_id = Column(Integer, default=0)
 
 class PasswordResetToken(Base):
     __tablename__ = "password_reset_tokens"
@@ -332,6 +341,15 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+def _set_chat_read(db: Session, user_id: int, task_id: int, last_message_id: int):
+    """Двигает отметку прочтения чата вперёд (никогда назад)."""
+    cr = db.query(ChatRead).filter(ChatRead.user_id == user_id, ChatRead.task_id == task_id).first()
+    if cr is None:
+        db.add(ChatRead(user_id=user_id, task_id=task_id, last_read_message_id=last_message_id))
+    elif last_message_id > (cr.last_read_message_id or 0):
+        cr.last_read_message_id = last_message_id
+    db.commit()
+
 # Pydantic models
 class UserCreate(BaseModel):
     email: EmailStr
@@ -454,6 +472,24 @@ def send_email(to: str, subject: str, body: str):
         server.login(user, password)
         server.send_message(msg)
 
+def _smtp_configured() -> bool:
+    return bool(os.environ.get("SMTP_HOST") and os.environ.get("SMTP_USER") and os.environ.get("SMTP_PASS"))
+
+def _send_email_safe(to: str, subject: str, body: str):
+    """Best-effort отправка: не роняет запрос, если SMTP не настроен или почта недоступна."""
+    if not to or not _smtp_configured():
+        return
+    try:
+        send_email(to, subject, body)
+    except Exception as e:
+        print(f"email to {to} failed: {e}")
+
+def queue_email(background: Optional[BackgroundTasks], to: Optional[str], subject: str, body: str):
+    """Ставит письмо в фоновую задачу, чтобы SMTP не тормозил ответ API."""
+    if background is None or not to or not _smtp_configured():
+        return
+    background.add_task(_send_email_safe, to, subject, body)
+
 @app.post("/auth/forgot-password")
 def forgot_password(req: ForgotPasswordRequest, request: Request, db: Session = Depends(get_db)):
     rate_limit(request, "forgot", limit=5, window_sec=3600)
@@ -528,10 +564,15 @@ def create_task(task: TaskCreate, token: str = Depends(oauth2_scheme), db: Sessi
 
 @app.get("/tasks/")
 def get_tasks(
+    response: FastResponse,
     category: Optional[TaskCategory] = None,
     search: Optional[str] = None,
     city: Optional[str] = None,
     is_remote: Optional[bool] = None,
+    status: Optional[TaskStatus] = None,
+    sort: str = "new",
+    limit: Optional[int] = None,
+    offset: int = 0,
     db: Session = Depends(get_db)
 ):
     query = db.query(Task)
@@ -543,8 +584,30 @@ def get_tasks(
         query = query.filter(Task.city == city)
     if is_remote is not None:
         query = query.filter(Task.is_remote == is_remote)
-    tasks = query.order_by(Task.id.desc()).all()
-    return tasks
+    if status is not None:
+        query = query.filter(Task.status == status)
+
+    # Сортировка на сервере (работает для всех страниц, а не только видимой)
+    if sort == "budget_desc":
+        query = query.order_by(Task.budget.desc().nullslast(), Task.id.desc())
+    elif sort == "budget_asc":
+        query = query.order_by(Task.budget.asc().nullsfirst(), Task.id.desc())
+    elif sort == "old":
+        query = query.order_by(Task.id.asc())  # id монотонен => порядок создания
+    else:  # "new" (по умолчанию)
+        query = query.order_by(Task.id.desc())
+
+    total = query.count()
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["Access-Control-Expose-Headers"] = "X-Total-Count"
+
+    # Пагинация включается только если передан limit (бот и старые клиенты получают всё)
+    if limit is not None:
+        limit = max(1, min(limit, 100))
+        offset = max(0, offset)
+        query = query.offset(offset).limit(limit)
+
+    return query.all()
 
 @app.get("/tasks/{task_id}")
 def get_task_detail(task_id: int, db: Session = Depends(get_db)):
@@ -717,6 +780,96 @@ def update_profile(profile: ProfileUpdate, token: str = Depends(oauth2_scheme), 
     db.commit()
     return {"message": "Профиль обновлен"}
 
+# ---- Кабинет пользователя: мои заказы и отклики ----
+
+@app.get("/me/tasks")
+def my_tasks(status: Optional[TaskStatus] = None, limit: int = 50, offset: int = 0, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    """Мои заказы — где я заказчик"""
+    payload = decode_token_or_401(token)
+    user_id = int(payload.get("sub"))
+    query = db.query(Task).filter(Task.customer_id == user_id)
+    if status:
+        query = query.filter(Task.status == status)
+    total = query.count()
+    tasks = query.order_by(Task.id.desc()).offset(offset).limit(limit).all()
+    result = []
+    for t in tasks:
+        executor = db.query(User).filter(User.id == t.executor_id).first() if t.executor_id else None
+        result.append({
+            "id": t.id,
+            "title": t.title,
+            "status": t.status,
+            "budget": t.budget,
+            "category": t.category,
+            "city": t.city,
+            "is_remote": t.is_remote,
+            "created_at": t.created_at or datetime.utcnow().isoformat(),
+            "executor_name": executor.name if executor else None,
+            "responses_count": db.query(Response).filter(Response.task_id == t.id).count()
+        })
+    return {"tasks": result, "total": total}
+
+@app.get("/me/responses")
+def my_responses(task_status: Optional[TaskStatus] = None, limit: int = 50, offset: int = 0, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    """Мои отклики — где я специалист"""
+    payload = decode_token_or_401(token)
+    specialist_id = int(payload.get("sub"))
+    query = db.query(Response).filter(Response.specialist_id == specialist_id)
+    # Можно фильтровать по статусу заказа
+    if task_status:
+        query = query.join(Task).filter(Task.status == task_status)
+    total = query.count()
+    responses = query.order_by(Response.id.desc()).offset(offset).limit(limit).all()
+    result = []
+    for r in responses:
+        task = db.query(Task).filter(Task.id == r.task_id).first()
+        customer = db.query(User).filter(User.id == task.customer_id).first() if task else None
+        result.append({
+            "id": r.id,
+            "task_id": r.task_id,
+            "task_title": task.title if task else None,
+            "text": r.text,
+            "proposed_price": r.proposed_price,
+            "estimated_days": r.estimated_days,
+            "task_status": task.status if task else None,
+            "customer_name": customer.name if customer else None,
+            "created_at": datetime.utcnow().isoformat()
+        })
+    return {"responses": result, "total": total}
+
+@app.get("/me/stats")
+def my_stats(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    """Статистика пользователя"""
+    payload = decode_token_or_401(token)
+    user_id = int(payload.get("sub"))
+    user = db.query(User).filter(User.id == user_id).first()
+    
+    # Заказы как заказчик
+    tasks_as_customer = db.query(Task).filter(Task.customer_id == user_id).count()
+    completed_as_customer = db.query(Task).filter(Task.customer_id == user_id, Task.status == TaskStatus.completed).count()
+    
+    # Отклики как специалист
+    responses_count = db.query(Response).filter(Response.specialist_id == user_id).count()
+    assigned_tasks = db.query(Task).filter(Task.executor_id == user_id, Task.status == TaskStatus.in_progress).count()
+    completed_as_specialist = db.query(Task).filter(Task.executor_id == user_id, Task.status == TaskStatus.completed).count()
+    
+    # Баланс и транзакции
+    balance = user.balance
+    recent_transactions = db.query(Transaction).filter(Transaction.user_id == user_id).order_by(Transaction.id.desc()).limit(10).all()
+    
+    return {
+        "role": user.role,
+        "balance": balance,
+        "tasks_as_customer": tasks_as_customer,
+        "completed_as_customer": completed_as_customer,
+        "responses_count": responses_count,
+        "assigned_tasks": assigned_tasks,
+        "completed_as_specialist": completed_as_specialist,
+        "recent_transactions": [
+            {"amount": t.amount, "type": t.type.value, "date": t.created_at} for t in recent_transactions
+        ]
+    }
+
 DEMO_DEPOSIT_MAX = 100000  # верхняя граница демо-пополнения (₽)
 
 @app.post("/wallet/deposit")
@@ -862,7 +1015,7 @@ def confirm_payment(payment_id: str, token: str = Depends(oauth2_scheme), db: Se
     return {"status": "succeeded", "credited": True, "new_balance": user.balance}
 
 @app.put("/tasks/{task_id}/assign")
-def assign_task(task_id: int, specialist_id: int, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+def assign_task(task_id: int, specialist_id: int, background: BackgroundTasks, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     payload = decode_token_or_401(token)
     customer_id = int(payload.get("sub"))
     customer = db.query(User).filter(User.id == customer_id).first()
@@ -896,6 +1049,11 @@ def assign_task(task_id: int, specialist_id: int, token: str = Depends(oauth2_sc
         task_id=task.id
     ))
     db.commit()
+    queue_email(
+        background, spec.email, "ДЕЛО — вас выбрали исполнителем",
+        f"Здравствуйте!\n\nЗаказчик назначил вас исполнителем задачи «{task.title}».\n\n"
+        f"Открыть заказ: {os.environ.get('FRONTEND_URL', 'https://delo-jhcy.onrender.com')}/task/{task.id}"
+    )
     return {"message": "Исполнитель назначен"}
 
 @app.put("/tasks/{task_id}/complete")
@@ -929,7 +1087,7 @@ def complete_task(task_id: int, token: str = Depends(oauth2_scheme), db: Session
     return {"message": "Заказ завершен"}
 
 @app.post("/tasks/{task_id}/responses")
-def create_response(task_id: int, response: ResponseCreate, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+def create_response(task_id: int, response: ResponseCreate, background: BackgroundTasks, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     payload = decode_token_or_401(token)
     if payload.get("role") != "specialist":
         raise HTTPException(403, "Только для специалистов")
@@ -961,6 +1119,14 @@ def create_response(task_id: int, response: ResponseCreate, token: str = Depends
             text=f"{'PRO ★ ' if specialist.is_pro else ''}{specialist.name or specialist.email} откликнулся на задачу \"{task.title}\"" + (f" — {response.proposed_price} ₽" if response.proposed_price else ""),
             task_id=task_id
         ))
+        customer = db.query(User).filter(User.id == task.customer_id).first()
+        if customer:
+            queue_email(
+                background, customer.email, "ДЕЛО — новый отклик на ваш заказ",
+                f"Здравствуйте!\n\n{specialist.name or specialist.email} откликнулся на ваш заказ «{task.title}»."
+                + (f"\nПредложенная цена: {response.proposed_price} ₽" if response.proposed_price else "")
+                + f"\n\nОткрыть отклики: {os.environ.get('FRONTEND_URL', 'https://delo-jhcy.onrender.com')}/task/{task_id}"
+            )
     db.commit()
     if not specialist.is_pro:
         db.commit()  # фиксируем списание отклика
@@ -1122,10 +1288,13 @@ def get_messages(task_id: int, token: str = Depends(oauth2_scheme), db: Session 
             "created_at": m.created_at,
             "sender_name": sender.name or sender.email if sender else "Unknown"
         })
+    # Открыл историю => всё до последнего сообщения прочитано
+    if messages:
+        _set_chat_read(db, user_id, task_id, messages[-1].id)
     return result
 
 @app.post("/tasks/{task_id}/messages")
-async def post_message(task_id: int, message: MessageCreate, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+async def post_message(task_id: int, message: MessageCreate, background: BackgroundTasks, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     payload = decode_token_or_401(token)
     user_id = int(payload.get("sub"))
     role = payload.get("role")
@@ -1143,6 +1312,9 @@ async def post_message(task_id: int, message: MessageCreate, token: str = Depend
     db.add(new_message)
     db.commit()
 
+    # Отправитель прочитал свой же чат по определению — сдвигаем его отметку
+    _set_chat_read(db, user_id, task_id, new_message.id)
+
     # Notify the other party about new message
     sender = db.query(User).filter(User.id == user_id).first()
     recipient_id = task.executor_id if role == "customer" else task.customer_id
@@ -1155,6 +1327,14 @@ async def post_message(task_id: int, message: MessageCreate, token: str = Depend
             task_id=task_id
         ))
         db.commit()
+        recipient = db.query(User).filter(User.id == recipient_id).first()
+        if recipient:
+            queue_email(
+                background, recipient.email, "ДЕЛО — новое сообщение по заказу",
+                f"Здравствуйте!\n\n{sender.name or sender.email} написал(а) вам по заказу «{task.title}»:\n\n"
+                f"{message.text[:300]}\n\n"
+                f"Ответить: {os.environ.get('FRONTEND_URL', 'https://delo-jhcy.onrender.com')}/task/{task_id}"
+            )
 
     sender = db.query(User).filter(User.id == user_id).first()
     message_dict = {
@@ -1168,6 +1348,52 @@ async def post_message(task_id: int, message: MessageCreate, token: str = Depend
 
     await manager.broadcast(message_dict, task_id)
     return message_dict
+
+@app.get("/chats/unread")
+def chats_unread(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    """Счётчики непрочитанных сообщений по каждому чату текущего пользователя."""
+    payload = decode_token_or_401(token)
+    user_id = int(payload.get("sub"))
+    # Задачи, где пользователь — участник (заказчик или исполнитель)
+    tasks = db.query(Task).filter(
+        (Task.customer_id == user_id) | (Task.executor_id == user_id)
+    ).all()
+    reads = {
+        cr.task_id: (cr.last_read_message_id or 0)
+        for cr in db.query(ChatRead).filter(ChatRead.user_id == user_id).all()
+    }
+    by_task = {}
+    total = 0
+    for t in tasks:
+        last_read = reads.get(t.id, 0)
+        # Непрочитанные = чужие сообщения новее отметки прочтения
+        cnt = db.query(Message).filter(
+            Message.task_id == t.id,
+            Message.id > last_read,
+            Message.sender_id != user_id
+        ).count()
+        if cnt:
+            by_task[t.id] = cnt
+            total += cnt
+    return {"total": total, "by_task": by_task}
+
+@app.post("/tasks/{task_id}/chat/read")
+def mark_chat_read(task_id: int, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    """Помечает чат прочитанным до последнего сообщения (участник заказа)."""
+    payload = decode_token_or_401(token)
+    user_id = int(payload.get("sub"))
+    role = payload.get("role")
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise HTTPException(404, "Заказ не найден")
+    if role == "customer" and task.customer_id != user_id:
+        raise HTTPException(403, "Нет доступа")
+    if role == "specialist" and task.executor_id != user_id:
+        raise HTTPException(403, "Нет доступа")
+    last = db.query(Message).filter(Message.task_id == task_id).order_by(Message.id.desc()).first()
+    if last:
+        _set_chat_read(db, user_id, task_id, last.id)
+    return {"message": "OK"}
 
 def public_file_url(request: Request, file_path: str) -> str:
     """Полный URL файла по фактическому адресу бэкенда (работает и локально, и на Render)"""
