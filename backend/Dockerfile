@@ -5,9 +5,8 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
+# We use precompiled wheels (psycopg2-binary, bcrypt), so no heavy compiler tools needed
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libpq-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
