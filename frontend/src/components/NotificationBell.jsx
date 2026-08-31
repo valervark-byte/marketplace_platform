@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 
-const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+const API_URL = import.meta.env.VITE_API_URL
+    || (import.meta.env.PROD ? '' : 'http://127.0.0.1:8000');
 
 const TYPE_ICONS = {
     new_response: '💬',
@@ -54,15 +55,25 @@ export const NotificationBell = ({ token }) => {
     };
 
     const markAllRead = async () => {
-        await axios.put(`${API_URL}/notifications/read-all`, {}, { headers });
-        setCount(0);
-        setNotifs(n => n.map(x => ({ ...x, is_read: true })));
+        try {
+            await axios.put(`${API_URL}/notifications/read-all`, {}, { headers });
+            setCount(0);
+            setNotifs(n => n.map(x => ({ ...x, is_read: true })));
+        } catch {
+            // Не удалось — оставляем UI как есть, перечитаем при следующем опросе
+            fetchCount();
+        }
     };
 
     const markRead = async (id) => {
-        await axios.put(`${API_URL}/notifications/${id}/read`, {}, { headers });
-        setNotifs(n => n.map(x => x.id === id ? { ...x, is_read: true } : x));
-        setCount(c => Math.max(0, c - 1));
+        try {
+            await axios.put(`${API_URL}/notifications/${id}/read`, {}, { headers });
+            setNotifs(n => n.map(x => x.id === id ? { ...x, is_read: true } : x));
+            setCount(c => Math.max(0, c - 1));
+        } catch {
+            // Молча игнорируем — счётчик восстановится следующим опросом
+            fetchCount();
+        }
     };
 
     return (

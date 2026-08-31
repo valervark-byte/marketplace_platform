@@ -3,31 +3,56 @@ import React, { useEffect, useRef, useState } from 'react';
 const YANDEX_API_KEY = import.meta.env.VITE_YANDEX_MAPS_API_KEY || '';
 const MOSCOW_CENTER = [55.751574, 37.573856]; // Москва центр
 
+// Экранирование пользовательского ввода перед вставкой в HTML балуна.
+// Без него заголовок/описание заказа с <img onerror=...> дают stored XSS.
+const escapeHtml = (value) => {
+    if (value === null || value === undefined) return '';
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+};
+
+// Единый загрузчик скрипта Яндекс.Карт: и TaskMap, и LocationPicker дёргают его,
+// без общего промиса в DOM попадали два тега <script>.
+let _ymapsPromise = null;
+const loadYmaps = () => {
+    if (window.ymaps && window.ymaps.ready) {
+        return new Promise((resolve) => window.ymaps.ready(resolve));
+    }
+    if (!_ymapsPromise) {
+        _ymapsPromise = new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = `https://api-maps.yandex.ru/2.1/?apikey=${YANDEX_API_KEY}&lang=ru_RU`;
+            script.async = true;
+            script.onload = () => window.ymaps.ready(resolve);
+            script.onerror = () => { _ymapsPromise = null; reject(new Error('Не удалось загрузить Яндекс.Карты')); };
+            document.head.appendChild(script);
+        });
+    }
+    return _ymapsPromise;
+};
+
 export const TaskMap = ({ tasks, onTaskClick, selectedTaskId }) => {
     const mapRef = useRef(null);
     const mapInstance = useRef(null);
     const markers = useRef([]);
+    const clickHandler = useRef(onTaskClick);
     const [mapReady, setMapReady] = useState(false);
 
+    // Держим актуальный колбэк без пересоздания карты
+    useEffect(() => { clickHandler.current = onTaskClick; }, [onTaskClick]);
+
     useEffect(() => {
-        // Load Yandex Maps API
-        if (!window.ymaps) {
-            const script = document.createElement('script');
-            script.src = `https://api-maps.yandex.ru/2.1/?apikey=${YANDEX_API_KEY}&lang=ru_RU`;
-            script.async = true;
-            script.onload = () => {
-                window.ymaps.ready(() => {
-                    initMap();
-                });
-            };
-            document.head.appendChild(script);
-        } else if (window.ymaps) {
-            window.ymaps.ready(() => {
-                initMap();
-            });
-        }
+        let unmounted = false;
+        loadYmaps()
+            .then(() => { if (!unmounted) initMap(); })
+            .catch((e) => console.error(e));
 
         return () => {
+            unmounted = true;
             if (mapInstance.current) {
                 mapInstance.current.destroy();
                 mapInstance.current = null;
@@ -67,20 +92,26 @@ export const TaskMap = ({ tasks, onTaskClick, selectedTaskId }) => {
         }
 
         tasksWithLocation.forEach(task => {
+            const desc = task.description || '';
+            const descShort = desc.length > 100 ? desc.substring(0, 100) + '...' : desc;
+            const budgetText = (task.budget || task.budget === 0)
+                ? `${escapeHtml(task.budget)} ₽`
+                : 'Бюджет не указан';
             const placemark = new window.ymaps.Placemark(
                 [task.latitude, task.longitude],
                 {
-                    balloonContentHeader: task.title,
+                    // Все пользовательские значения экранируются — балун рендерит HTML
+                    balloonContentHeader: escapeHtml(task.title),
                     balloonContentBody: `
                         <div style="max-width: 250px;">
                             <p style="margin: 8px 0; color: #059669; font-weight: bold; font-size: 16px;">
-                                ${task.budget} ₽
+                                ${budgetText}
                             </p>
                             <p style="margin: 8px 0; color: #6b7280; font-size: 14px;">
-                                ${task.description.substring(0, 100)}${task.description.length > 100 ? '...' : ''}
+                                ${escapeHtml(descShort)}
                             </p>
                             <button
-                                onclick="window.openTaskFromMap(${task.id})"
+                                data-task-btn="${escapeHtml(task.id)}"
                                 style="
                                     background: #2563eb;
                                     color: white;
@@ -96,7 +127,7 @@ export const TaskMap = ({ tasks, onTaskClick, selectedTaskId }) => {
                             </button>
                         </div>
                     `,
-                    balloonContentFooter: task.city
+                    balloonContentFooter: escapeHtml(task.city)
                 },
                 {
                     preset: task.id === selectedTaskId
@@ -105,6 +136,20 @@ export const TaskMap = ({ tasks, onTaskClick, selectedTaskId }) => {
                     iconColor: task.status === 'open' ? '#2563eb' : '#6b7280'
                 }
             );
+
+            // Кнопку «Подробнее» вешаем через DOM-listener после открытия балуна,
+            // без глобального window.openTaskFromMap и без inline onclick
+            placemark.events.add('balloonopen', () => {
+                setTimeout(() => {
+                    const btn = document.querySelector(`[data-task-btn="${task.id}"]`);
+                    if (btn && !btn.dataset.bound) {
+                        btn.dataset.bound = '1';
+                        btn.addEventListener('click', () => {
+                            if (clickHandler.current) clickHandler.current(task.id);
+                        });
+                    }
+                }, 0);
+            });
 
             markers.current.push(placemark);
             mapInstance.current.geoObjects.add(placemark);
@@ -121,14 +166,7 @@ export const TaskMap = ({ tasks, onTaskClick, selectedTaskId }) => {
             }
         }
 
-        // Setup click handler
-        window.openTaskFromMap = (taskId) => {
-            if (onTaskClick) {
-                onTaskClick(taskId);
-            }
-        };
-
-    }, [tasks, mapReady, selectedTaskId, onTaskClick]);
+    }, [tasks, mapReady, selectedTaskId]);
 
     return (
         <div className="w-full h-full relative">
@@ -161,21 +199,16 @@ export const LocationPicker = ({ initialLocation, onLocationSelect, city = 'Мо
     };
 
     useEffect(() => {
-        if (!window.ymaps) {
-            const script = document.createElement('script');
-            script.src = `https://api-maps.yandex.ru/2.1/?apikey=${YANDEX_API_KEY}&lang=ru_RU`;
-            script.async = true;
-            script.onload = () => {
-                window.ymaps.ready(() => initMap());
-            };
-            document.head.appendChild(script);
-        } else {
-            window.ymaps.ready(() => initMap());
-        }
+        let unmounted = false;
+        loadYmaps()
+            .then(() => { if (!unmounted) initMap(); })
+            .catch((e) => console.error(e));
 
         return () => {
+            unmounted = true;
             if (mapInstance.current) {
                 mapInstance.current.destroy();
+                mapInstance.current = null;
             }
         };
     }, []);

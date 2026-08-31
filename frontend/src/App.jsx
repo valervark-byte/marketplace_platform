@@ -10,7 +10,25 @@ import { useToast } from './components/Toast';
 import { ConfirmDialog, Lightbox, useModalBehavior } from './components/Dialogs';
 import deloArt from './assets/delo_art.jpg';
 
-const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+// В dev по умолчанию бьём в локальный бэкенд; в проде переменная обязательна,
+// иначе приложение молча ходило бы на localhost (mixed-content под HTTPS).
+const API_URL = import.meta.env.VITE_API_URL
+    || (import.meta.env.PROD ? '' : 'http://127.0.0.1:8000');
+if (!API_URL) {
+    console.error('VITE_API_URL не задан для production-сборки — запросы к API работать не будут.');
+}
+
+// Безопасный разбор JWT: битый/просроченный токен не должен ронять рендер белым экраном.
+const safeUserId = (token) => {
+    if (!token) return null;
+    try {
+        const sub = jwtDecode(token).sub;
+        const id = parseInt(sub, 10);
+        return Number.isNaN(id) ? null : id;
+    } catch {
+        return null;
+    }
+};
 
 const CATEGORIES = [
     { value: 'design', label: '🎨 Дизайн' },
@@ -753,7 +771,7 @@ const TaskPage = () => {
 
     const parseImages = (imgs) => { try { return imgs ? JSON.parse(imgs) : []; } catch { return []; } };
     const images = task ? parseImages(task.images) : [];
-    const isOwner = token && role === 'customer' && task && task.customer_id === parseInt(jwtDecode(token).sub);
+    const isOwner = token && role === 'customer' && task && task.customer_id === safeUserId(token);
 
     const handleDeleteImage = async (url) => {
         try {
@@ -1201,7 +1219,13 @@ const Feed = () => {
         axios.get(`${API_URL}/tasks/?${buildTaskParams(tasks.length).toString()}`)
             .then(res => {
                 setTasks(prev => [...prev, ...res.data]);
-                setTotal(parseInt(res.headers['x-total-count'] || tasks.length, 10));
+                // Если заголовка нет — не занижаем total (иначе кнопка «ещё» пропадёт раньше времени)
+                const header = res.headers['x-total-count'];
+                if (header != null) {
+                    setTotal(parseInt(header, 10));
+                } else {
+                    setTotal(prev => Math.max(prev, tasks.length + res.data.length));
+                }
             })
             .catch(err => console.error("Error loading more tasks:", err))
             .finally(() => setLoadingMore(false));
@@ -1612,7 +1636,7 @@ const Feed = () => {
                                         {role === 'specialist' && t.status === 'open' && (
                                             <button onClick={() => setSelectedTask(t)} className={btnPrimary}>Откликнуться</button>
                                         )}
-                                        {role === 'specialist' && t.status === 'in_progress' && t.executor_id === parseInt(jwtDecode(token).sub) && (
+                                        {role === 'specialist' && t.status === 'in_progress' && t.executor_id === safeUserId(token) && (
                                             <button onClick={() => setChatTask(t)} className={`${btnSignal} relative`}>
                                                 Рабочая область
                                                 {unread.by_task[t.id] > 0 && (
@@ -1620,7 +1644,7 @@ const Feed = () => {
                                                 )}
                                             </button>
                                         )}
-                                        {role === 'customer' && t.customer_id === parseInt(jwtDecode(token).sub) && (
+                                        {role === 'customer' && t.customer_id === safeUserId(token) && (
                                             <div className="flex gap-2 flex-wrap">
                                                 {t.status === 'open' && (
                                                     <button onClick={() => loadResponses(t.id)} className={btnGhost}>Смотреть отклики</button>
@@ -1638,7 +1662,7 @@ const Feed = () => {
                                                 )}
                                             </div>
                                         )}
-                                        {role === 'specialist' && t.status === 'completed' && t.executor_id === parseInt(jwtDecode(token).sub) && (
+                                        {role === 'specialist' && t.status === 'completed' && t.executor_id === safeUserId(token) && (
                                             <button onClick={() => setReviewingTask(t)} className={btnGhost}>★ Отзыв о заказчике</button>
                                         )}
                                     </div>
@@ -1770,7 +1794,7 @@ const Feed = () => {
                                     <div className="text-center text-muted/60 my-auto font-display uppercase text-sm">Нет сообщений. Начните общение первым.</div>
                                 ) : (
                                     messages.map(msg => {
-                                        const isMe = msg.sender_id === parseInt(jwtDecode(token).sub);
+                                        const isMe = msg.sender_id === safeUserId(token);
                                         return (
                                             <div key={msg.id} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
                                                 <div className={`max-w-[75%] px-4 py-2 rounded-2xl ${isMe ? 'bg-accent text-white rounded-br-md' : 'bg-surface-2 border border-border rounded-bl-md'}`}>
@@ -1874,6 +1898,21 @@ const Feed = () => {
 export default function App() {
     const { isAuth, role, logout, token } = useAuthStore();
     const [showAuthModal, setShowAuthModal] = useState(false);
+
+    // Глобальная обработка протухшего токена: любой 401 от API => разлогин,
+    // иначе isAuth остаётся true, а запросы молча падают.
+    useEffect(() => {
+        const id = axios.interceptors.response.use(
+            (r) => r,
+            (error) => {
+                if (error?.response?.status === 401 && useAuthStore.getState().isAuth) {
+                    logout();
+                }
+                return Promise.reject(error);
+            }
+        );
+        return () => axios.interceptors.response.eject(id);
+    }, [logout]);
 
     return (
         <BrowserRouter>

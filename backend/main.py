@@ -491,10 +491,12 @@ def queue_email(background: Optional[BackgroundTasks], to: Optional[str], subjec
     background.add_task(_send_email_safe, to, subject, body)
 
 @app.post("/auth/forgot-password")
-def forgot_password(req: ForgotPasswordRequest, request: Request, db: Session = Depends(get_db)):
+def forgot_password(req: ForgotPasswordRequest, request: Request, background: BackgroundTasks, db: Session = Depends(get_db)):
     rate_limit(request, "forgot", limit=5, window_sec=3600)
     user = db.query(User).filter(User.email == req.email).first()
-    # Не раскрываем существование аккаунта — всегда отвечаем успехом
+    # Не раскрываем существование аккаунта — всегда отвечаем успехом.
+    # Письмо шлём в фоне через best-effort: если SMTP не настроен/недоступен,
+    # запрос НЕ падает с 503 (иначе разница ответов выдаёт, что аккаунт существует).
     if user:
         import secrets as pysecrets
         token = pysecrets.token_urlsafe(32)
@@ -507,7 +509,8 @@ def forgot_password(req: ForgotPasswordRequest, request: Request, db: Session = 
         db.commit()
         frontend_url = os.environ.get("FRONTEND_URL", "https://delo-jhcy.onrender.com")
         link = f"{frontend_url}/reset?token={token}"
-        send_email(
+        queue_email(
+            background,
             req.email,
             "ДЕЛО — сброс пароля",
             f"Здравствуйте!\n\nКто-то (надеемся, вы) запросил сброс пароля на маркетплейсе ДЕЛО.\n"
@@ -517,7 +520,8 @@ def forgot_password(req: ForgotPasswordRequest, request: Request, db: Session = 
     return {"message": "Если аккаунт существует, письмо со ссылкой отправлено"}
 
 @app.post("/auth/reset-password")
-def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
+def reset_password(req: ResetPasswordRequest, request: Request, db: Session = Depends(get_db)):
+    rate_limit(request, "reset", limit=10, window_sec=3600)  # защита от перебора токена
     reset = db.query(PasswordResetToken).filter(PasswordResetToken.token == req.token).first()
     if not reset or reset.used:
         raise HTTPException(400, "Ссылка недействительна или уже использована")
@@ -1022,6 +1026,9 @@ def assign_task(task_id: int, specialist_id: int, background: BackgroundTasks, t
     task = db.query(Task).filter(Task.id == task_id, Task.customer_id == customer_id).first()
     if not task:
         raise HTTPException(404, "Заказ не найден или вы не его автор")
+    # Только открытый заказ можно назначить — иначе повторный вызов удержит escrow дважды
+    if task.status != TaskStatus.open:
+        raise HTTPException(400, "Исполнитель уже назначен или заказ закрыт")
 
     spec = db.query(User).filter(User.id == specialist_id, User.role == UserRole.specialist).first()
     if not spec:
@@ -1063,6 +1070,9 @@ def complete_task(task_id: int, token: str = Depends(oauth2_scheme), db: Session
     task = db.query(Task).filter(Task.id == task_id, Task.customer_id == customer_id).first()
     if not task:
         raise HTTPException(404, "Заказ не найден или вы не его автор")
+    # Завершить можно только заказ «в работе» — иначе повторный вызов выплатит escrow дважды
+    if task.status != TaskStatus.in_progress:
+        raise HTTPException(400, "Завершить можно только заказ в работе")
 
     task.status = TaskStatus.completed
 
@@ -1094,6 +1104,18 @@ def create_response(task_id: int, response: ResponseCreate, background: Backgrou
     specialist_id = int(payload.get("sub"))
     specialist = db.query(User).filter(User.id == specialist_id).first()
 
+    # Сначала валидируем заказ — иначе можно сжечь платный отклик на несуществующий/закрытый заказ
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise HTTPException(404, "Заказ не найден")
+    if task.status != TaskStatus.open:
+        raise HTTPException(400, "Заказ больше не принимает отклики")
+    if task.customer_id == specialist_id:
+        raise HTTPException(400, "Нельзя откликнуться на свой заказ")
+    # Один отклик на заказ — не даём спамить заказчика и списывать несколько кредитов
+    if db.query(Response).filter(Response.task_id == task_id, Response.specialist_id == specialist_id).first():
+        raise HTTPException(400, "Вы уже откликнулись на этот заказ")
+
     # Монетизация: PRO — безлимит, иначе списываем 1 отклик
     if not specialist.is_pro:
         if (specialist.response_credits or 0) <= 0:
@@ -1110,7 +1132,6 @@ def create_response(task_id: int, response: ResponseCreate, background: Backgrou
     db.add(new_response)
 
     # Notify customer about new response
-    task = db.query(Task).filter(Task.id == task_id).first()
     if task:
         db.add(Notification(
             user_id=task.customer_id,
