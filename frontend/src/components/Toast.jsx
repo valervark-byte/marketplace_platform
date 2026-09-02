@@ -31,7 +31,7 @@ export const ToastProvider = ({ children }) => {
                     <div
                         key={t.id}
                         role="status"
-                        className={`flex items-start gap-3 glass rounded-xl shadow-pop p-3.5 pr-9 relative font-semibold text-sm ${t.type === 'error' ? 'text-danger' : 'text-ink'}`}
+                        className={`flex items-start gap-3 bg-surface border border-border rounded-xl shadow-pop p-3.5 pr-9 relative font-semibold text-sm ${t.type === 'error' ? 'text-danger' : 'text-ink'}`}
                     >
                         <span className={`shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-extrabold ${t.type === 'error' ? 'bg-danger' : t.type === 'info' ? 'bg-accent' : 'bg-success'}`}>
                             {t.type === 'error' ? '!' : t.type === 'info' ? 'i' : '✓'}

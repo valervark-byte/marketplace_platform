@@ -51,7 +51,7 @@ export const ImageUploader = ({ token, endpoint, onUploadSuccess, buttonText = "
 
     return (
         <div className="inline-block">
-            <label className={`${uploading ? 'opacity-50 cursor-wait' : 'cursor-pointer'} inline-flex items-center gap-2 rounded-xl bg-accent text-white px-4 py-2.5 font-display text-[11px] uppercase tracking-wider transition hover:bg-accent-bright hover:glow-accent-sm`}>
+            <label className={`${uploading ? 'opacity-50 cursor-wait' : 'cursor-pointer'} inline-flex items-center gap-2 rounded-xl bg-accent text-white px-4 py-2.5 font-display text-[11px] uppercase tracking-wider transition hover:bg-accent-bright`}>
                 {uploading ? (
                     <>
                         <span className="animate-spin">⏳</span>
@@ -112,7 +112,7 @@ export const PortfolioUploader = ({ token, portfolio = [], onUploadSuccess }) =>
                             <img
                                 src={img}
                                 alt={`Portfolio ${idx + 1}`}
-                                className="w-full h-32 object-cover rounded-xl border border-border transition hover:border-accent/60 hover:glow-accent-sm cursor-pointer"
+                                className="w-full h-32 object-cover rounded-xl border border-border transition hover:border-accent/60 cursor-pointer"
                                 onClick={() => window.open(img, '_blank')}
                             />
                         </div>

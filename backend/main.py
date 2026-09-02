@@ -577,8 +577,19 @@ def get_tasks(
     sort: str = "new",
     limit: Optional[int] = None,
     offset: int = 0,
+    # Новые фильтры
+    budget_min: Optional[int] = None,
+    budget_max: Optional[int] = None,
+    deadline_days: Optional[int] = None,  # задачи с дедлайном в ближайшие N дней
+    new_only: Optional[bool] = None,  # задачи за последние 24 часа
+    has_responses: Optional[bool] = None,  # задачи с откликами
+    lat: Optional[float] = None,  # для радиуса поиска
+    lon: Optional[float] = None,
+    radius_km: Optional[float] = None,
     db: Session = Depends(get_db)
 ):
+    from sqlalchemy import func, cast, Float as SqlFloat
+
     query = db.query(Task)
     if category:
         query = query.filter(Task.category == category)
@@ -590,6 +601,51 @@ def get_tasks(
         query = query.filter(Task.is_remote == is_remote)
     if status is not None:
         query = query.filter(Task.status == status)
+
+    # Фильтр по бюджету
+    if budget_min is not None:
+        query = query.filter(Task.budget >= budget_min)
+    if budget_max is not None:
+        query = query.filter(Task.budget <= budget_max)
+
+    # Фильтр по дедлайну (задачи с дедлайном в ближайшие N дней)
+    if deadline_days is not None and deadline_days > 0:
+        from datetime import datetime, timedelta
+        deadline_cutoff = (datetime.utcnow() + timedelta(days=deadline_days)).isoformat()
+        query = query.filter(Task.deadline.isnot(None), Task.deadline <= deadline_cutoff)
+
+    # Фильтр "новые" (задачи за последние 24 часа)
+    if new_only:
+        from datetime import datetime, timedelta
+        cutoff = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+        query = query.filter(Task.created_at >= cutoff)
+
+    # Фильтр по наличию откликов
+    if has_responses is not None:
+        from sqlalchemy import exists, and_
+        if has_responses:
+            query = query.filter(
+                exists().where(and_(Response.task_id == Task.id))
+            )
+        else:
+            query = query.filter(
+                ~exists().where(and_(Response.task_id == Task.id))
+            )
+
+    # Радиус поиска (упрощённая формула Haversine для малых расстояний)
+    if lat is not None and lon is not None and radius_km is not None and radius_km > 0:
+        # Фильтруем задачи в радиусе radius_km от точки (lat, lon)
+        # Упрощённая формула: ~111км на градус широты, cos(lat) корректирует долготу
+        import math
+        lat_delta = radius_km / 111.0
+        lon_delta = radius_km / (111.0 * math.cos(math.radians(lat)))
+        query = query.filter(
+            Task.latitude.isnot(None),
+            Task.longitude.isnot(None),
+            Task.latitude.between(lat - lat_delta, lat + lat_delta),
+            Task.longitude.between(lon - lon_delta, lon + lon_delta)
+        )
+        # Для точности можно добавить дистанцию в ORDER BY позже
 
     # Сортировка на сервере (работает для всех страниц, а не только видимой)
     if sort == "budget_desc":

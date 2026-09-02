@@ -4,68 +4,76 @@
     --font-display: "Unbounded", "Arial Black", sans-serif;
     --font-sans: "Manrope", system-ui, sans-serif;
 
-    /* Dark modern palette */
-    --color-base: #0A0E17;
-    --color-surface: #111827;
-    --color-surface-2: #1A2332;
-    --color-elevated: #202B3D;
-    --color-border: #2A3648;
-    --color-border-bright: #3D4C63;
+    /* Warm light palette — Hims inspired */
+    --color-base: #FAF7F2;
+    --color-surface: #FFFFFF;
+    --color-surface-2: #F5F0E8;
+    --color-elevated: #EDE6DA;
+    --color-border: #D9CFC1;
+    --color-border-bright: #C4B5A3;
 
-    --color-ink: #E8ECF4;
-    --color-muted: #8B95A7;
+    --color-ink: #1A1512;
+    --color-muted: #6B5D52;
+    --color-faint: #9B8D7F;
 
-    --color-accent: #7C6CFF;
-    --color-accent-bright: #9D8DFF;
-    --color-accent-glow: rgba(124, 108, 255, 0.35);
-    --color-success: #34D399;
-    --color-danger: #F87171;
-    --color-star: #FBBF24;
+    /* Terracotta/Orange accent — warm, grounded */
+    --color-accent: #D97706;
+    --color-accent-bright: #F59E0B;
+    --color-accent-deep: #B45309;
+    --color-spark: #EA580C;
+    --color-accent-glow: rgba(217, 119, 6, 0.15);
+    --color-spark-glow: rgba(234, 88, 12, 0.12);
+
+    --color-success: #059669;
+    --color-danger: #DC2626;
+    --color-warning: #D97706;
+    --color-star: #F59E0B;
+
+    --radius-card: 1rem;
 }
 
-/* Soft elevation shadows with a hint of glow */
+/* ---- Elevation — minimal shadows, soft ---- */
 @utility shadow-card {
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.06);
 }
 
 @utility shadow-pop {
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--color-border);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12), 0 2px 4px rgba(0, 0, 0, 0.08);
 }
 
 @utility glow-accent {
-    box-shadow: 0 0 24px var(--color-accent-glow);
+    box-shadow: 0 0 0 3px var(--color-accent-glow);
 }
 
 @utility glow-accent-sm {
-    box-shadow: 0 0 14px var(--color-accent-glow);
+    box-shadow: 0 0 0 2px var(--color-accent-glow);
 }
 
-/* Glassmorphism panel */
-@utility glass {
-    background: rgba(26, 35, 50, 0.72);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-    border: 1px solid var(--color-border);
+@utility glow-spark {
+    box-shadow: 0 0 0 3px var(--color-spark-glow);
 }
 
-/* Subtle dot-grid background */
+/* ---- Backgrounds ---- */
 @utility dot-grid {
-    background-image: radial-gradient(circle, rgba(139, 149, 167, 0.14) 1px, transparent 1px);
-    background-size: 26px 26px;
+    background-image: radial-gradient(circle, rgba(107, 93, 82, 0.08) 1px, transparent 1px);
+    background-size: 24px 24px;
 }
 
-/* Aurora gradient hero backdrop */
-@utility aurora {
-    background:
-        radial-gradient(ellipse 60% 50% at 20% 0%, rgba(124, 108, 255, 0.18), transparent),
-        radial-gradient(ellipse 50% 40% at 85% 20%, rgba(56, 189, 248, 0.12), transparent),
-        radial-gradient(ellipse 70% 60% at 50% 100%, rgba(124, 108, 255, 0.08), transparent);
+/* Accent gradient text */
+@utility text-gradient {
+    background: linear-gradient(135deg, var(--color-accent-deep), var(--color-spark));
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
 }
 
+/* ---- Base ---- */
 body {
     background-color: var(--color-base);
     color: var(--color-ink);
     font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
 }
 
 ::selection {
@@ -86,21 +94,67 @@ body {
 ::-webkit-scrollbar-thumb {
     background: var(--color-border);
     border-radius: 8px;
+    border: 2px solid var(--color-base);
 }
 
 ::-webkit-scrollbar-thumb:hover {
     background: var(--color-border-bright);
 }
 
-/* Inputs: dark autofill */
+/* Inputs */
 input, select, textarea {
-    color-scheme: dark;
+    color-scheme: light;
 }
 
-input:-webkit-autofill,
-input:-webkit-autofill:hover,
-input:-webkit-autofill:focus {
-    -webkit-text-fill-color: var(--color-ink);
-    -webkit-box-shadow: 0 0 0 1000px var(--color-surface-2) inset;
-    transition: background-color 5000s ease-in-out 0s;
+/* ---- Motion ---- */
+@keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes rise-in {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pop-in {
+    from { opacity: 0; transform: scale(0.97) translateY(6px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+}
+
+@utility animate-fade-in {
+    animation: fade-in 0.25s ease both;
+}
+
+@utility animate-rise-in {
+    animation: rise-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@utility animate-pop-in {
+    animation: pop-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Shimmer skeleton */
+@utility skeleton {
+    background: linear-gradient(
+        90deg,
+        var(--color-surface-2) 25%,
+        var(--color-elevated) 37%,
+        var(--color-surface-2) 63%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
 }

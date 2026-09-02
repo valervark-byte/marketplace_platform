@@ -95,7 +95,7 @@ export const NotificationBell = ({ token }) => {
             </button>
 
             {open && (
-                <div className="fixed inset-x-4 top-20 mx-auto max-w-sm sm:absolute sm:inset-x-auto sm:top-12 sm:right-0 sm:mx-0 sm:w-80 glass rounded-2xl shadow-pop z-50">
+                <div className="fixed inset-x-4 top-20 mx-auto max-w-sm sm:absolute sm:inset-x-auto sm:top-12 sm:right-0 sm:mx-0 sm:w-80 bg-surface border border-border rounded-2xl shadow-pop z-50">
                     <div className="flex justify-between items-center px-4 py-3 border-b border-border">
                         <h3 className="font-display font-bold uppercase text-sm">Уведомления</h3>
                         {count > 0 && (
