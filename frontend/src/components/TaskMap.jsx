@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { getCityCoords } from '../lib/cityCoords';
 
 const YANDEX_API_KEY = import.meta.env.VITE_YANDEX_MAPS_API_KEY || '';
-const MOSCOW_CENTER = [55.751574, 37.573856]; // Москва центр
+const MOSCOW_CENTER = [55.7558, 37.6173]; // Москва центр (fallback)
 
 // Экранирование пользовательского ввода перед вставкой в HTML балуна.
 // Без него заголовок/описание заказа с <img onerror=...> дают stored XSS.
@@ -35,12 +36,13 @@ const loadYmaps = () => {
     return _ymapsPromise;
 };
 
-export const TaskMap = ({ tasks, onTaskClick, selectedTaskId }) => {
+export const TaskMap = ({ tasks, onTaskClick, selectedTaskId, city }) => {
     const mapRef = useRef(null);
     const mapInstance = useRef(null);
     const markers = useRef([]);
     const clickHandler = useRef(onTaskClick);
     const [mapReady, setMapReady] = useState(false);
+    const [userLocation, setUserLocation] = useState(null);
 
     // Держим актуальный колбэк без пересоздания карты
     useEffect(() => { clickHandler.current = onTaskClick; }, [onTaskClick]);
@@ -63,13 +65,40 @@ export const TaskMap = ({ tasks, onTaskClick, selectedTaskId }) => {
     const initMap = () => {
         if (!mapRef.current || mapInstance.current) return;
 
+        // Определяем начальный центр: город из фильтра → геолокация → Москва
+        let initialCenter = MOSCOW_CENTER;
+        if (city) {
+            const coords = getCityCoords(city);
+            if (coords) initialCenter = coords;
+        }
+
         mapInstance.current = new window.ymaps.Map(mapRef.current, {
-            center: MOSCOW_CENTER,
+            center: initialCenter,
             zoom: 11,
-            controls: ['zoomControl', 'fullscreenControl', 'geolocationControl']
+            controls: ['zoomControl', 'fullscreenControl']
         });
 
         setMapReady(true);
+    };
+
+    // Центрировать карту на геолокацию пользователя
+    const centerOnUserLocation = () => {
+        if (!mapInstance.current) return;
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    const coords = [position.coords.latitude, position.coords.longitude];
+                    setUserLocation(coords);
+                    mapInstance.current.setCenter(coords, 13, { duration: 500 });
+                },
+                (error) => {
+                    console.error('Ошибка геолокации:', error);
+                    alert('Не удалось определить вашу геопозицию. Проверьте разрешения браузера.');
+                }
+            );
+        } else {
+            alert('Геолокация не поддерживается вашим браузером.');
+        }
     };
 
     useEffect(() => {
@@ -168,6 +197,15 @@ export const TaskMap = ({ tasks, onTaskClick, selectedTaskId }) => {
 
     }, [tasks, mapReady, selectedTaskId]);
 
+    // При смене города центрировать карту
+    useEffect(() => {
+        if (!mapReady || !mapInstance.current || !city) return;
+        const coords = getCityCoords(city);
+        if (coords) {
+            mapInstance.current.setCenter(coords, 11, { duration: 500 });
+        }
+    }, [city, mapReady]);
+
     return (
         <div className="w-full h-full relative">
             <div ref={mapRef} className="w-full h-full overflow-hidden" />
@@ -179,6 +217,15 @@ export const TaskMap = ({ tasks, onTaskClick, selectedTaskId }) => {
                     </div>
                 </div>
             )}
+            {mapReady && (
+                <button
+                    onClick={centerOnUserLocation}
+                    className="absolute top-4 right-4 z-10 bg-surface border border-border rounded-xl px-4 py-2.5 font-bold text-sm shadow-card hover:border-accent transition flex items-center gap-2"
+                    title="Показать мою геопозицию"
+                >
+                    📍 Моё местоположение
+                </button>
+            )}
         </div>
     );
 };
@@ -188,15 +235,6 @@ export const LocationPicker = ({ initialLocation, onLocationSelect, city = 'Мо
     const mapInstance = useRef(null);
     const marker = useRef(null);
     const [mapReady, setMapReady] = useState(false);
-
-    // City coordinates
-    const cityCoords = {
-        'Москва': [55.751574, 37.573856],
-        'Санкт-Петербург': [59.9343, 30.3351],
-        'Новосибирск': [55.0084, 82.9357],
-        'Екатеринбург': [56.8389, 60.6057],
-        'Казань': [55.8304, 49.0661],
-    };
 
     useEffect(() => {
         let unmounted = false;
@@ -216,7 +254,12 @@ export const LocationPicker = ({ initialLocation, onLocationSelect, city = 'Мо
     const initMap = () => {
         if (!mapRef.current || mapInstance.current) return;
 
-        const center = initialLocation || cityCoords[city] || MOSCOW_CENTER;
+        // Центр: переданная локация → координаты города → Москва
+        let center = initialLocation;
+        if (!center) {
+            const cityCoords = getCityCoords(city);
+            center = cityCoords || MOSCOW_CENTER;
+        }
 
         mapInstance.current = new window.ymaps.Map(mapRef.current, {
             center,

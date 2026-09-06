@@ -98,9 +98,61 @@ const PublicProfilePage = () => {
                             {user.city && <span className="rounded-full border border-border bg-surface-2 text-[10px] font-bold uppercase tracking-widest px-2.5 py-1">📍 {user.city}</span>}
                             {user.rating !== null && <span className="rounded-full border border-border bg-surface-2 text-[10px] font-bold uppercase tracking-widest px-2.5 py-1">⭐ {user.rating} / 5</span>}
                             {user.role === 'specialist' && <span className="rounded-full border border-border bg-surface-2 text-[10px] font-bold uppercase tracking-widest px-2.5 py-1">📋 {user.completed_tasks} заказов</span>}
+                            {user.role === 'specialist' && user.experience_years != null && <span className="rounded-full border border-border bg-surface-2 text-[10px] font-bold uppercase tracking-widest px-2.5 py-1">🎓 {user.experience_years} лет опыта</span>}
+                            {user.role === 'specialist' && user.hourly_rate != null && <span className="rounded-full border border-border bg-surface-2 text-[10px] font-bold uppercase tracking-widest px-2.5 py-1">💰 {user.hourly_rate} ₽/час</span>}
                         </div>
                     </div>
                 </div>
+
+                {/* Специализация + компания */}
+                {(user.specialization || user.education || user.company_name || user.website) && (
+                    <div className="p-6 border-b border-border/60 grid gap-3">
+                        {user.specialization && (
+                            <div>
+                                <div className="text-[11px] font-bold uppercase tracking-wider text-muted mb-1">Специализация</div>
+                                <p className="text-ink/85 font-medium">{user.specialization}</p>
+                            </div>
+                        )}
+                        {user.education && (
+                            <div>
+                                <div className="text-[11px] font-bold uppercase tracking-wider text-muted mb-1">Образование</div>
+                                <p className="text-ink/85 font-medium">{user.education}</p>
+                            </div>
+                        )}
+                        {user.company_name && (
+                            <div>
+                                <div className="text-[11px] font-bold uppercase tracking-wider text-muted mb-1">Компания</div>
+                                <p className="text-ink/85 font-medium">{user.company_name}</p>
+                                {user.company_description && <p className="text-ink/70 text-sm mt-1 font-medium whitespace-pre-wrap break-words">{user.company_description}</p>}
+                            </div>
+                        )}
+                        {user.website && (
+                            <div>
+                                <div className="text-[11px] font-bold uppercase tracking-wider text-muted mb-1">Сайт</div>
+                                <a href={user.website} target="_blank" rel="noopener noreferrer" className="text-accent-bright font-bold hover:underline break-all">{user.website}</a>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* Контакты */}
+                {(user.telegram_handle || user.whatsapp) && (
+                    <div className="p-6 border-b border-border/60">
+                        <div className="text-[11px] font-bold uppercase tracking-wider text-muted mb-3">Контакты</div>
+                        <div className="flex flex-wrap gap-3">
+                            {user.telegram_handle && (
+                                <a href={`https://t.me/${user.telegram_handle.replace(/^@/, '')}`} target="_blank" rel="noopener noreferrer" className="rounded-xl border border-border bg-surface-2 px-3 py-2 font-bold text-sm hover:border-accent/60 transition">
+                                    ✈️ {user.telegram_handle}
+                                </a>
+                            )}
+                            {user.whatsapp && (
+                                <a href={`https://wa.me/${user.whatsapp.replace(/[^\d]/g, '')}`} target="_blank" rel="noopener noreferrer" className="rounded-xl border border-border bg-surface-2 px-3 py-2 font-bold text-sm hover:border-accent/60 transition">
+                                    💬 WhatsApp
+                                </a>
+                            )}
+                        </div>
+                    </div>
+                )}
 
                 {user.bio && (
                     <div className="p-6 border-b border-border/60">

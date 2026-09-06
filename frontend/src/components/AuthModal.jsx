@@ -40,7 +40,7 @@ const AuthModal = ({ onClose }) => {
                 params.append('password', password);
 
                 const res = await api.post('/login', params);
-                login(res.data.access_token, res.data.role);
+                login(res.data.access_token, res.data.role, res.data.roles);
                 onClose();
             } else {
                 await api.post('/register/', { email, password, role, name: name || null });

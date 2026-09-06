@@ -15,6 +15,11 @@ import bcrypt
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from typing import Optional, List
+from dotenv import load_dotenv
+
+# Загрузка переменных окружения из .env (TELEGRAM_BOT_TOKEN и др.)
+load_dotenv()
+
 from file_utils import save_upload_file, delete_file, UPLOAD_DIR, validate_image
 from geocoding import geocode_address
 import payments
@@ -78,20 +83,38 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, unique=True, index=True)
     hashed_password = Column(String)
-    role = Column(SqlaEnum(UserRole), default=UserRole.customer)
+    role = Column(SqlaEnum(UserRole), default=UserRole.customer)  # основная роль (для обратной совместимости)
+    active_role = Column(SqlaEnum(UserRole), nullable=True)  # текущая активная роль (customer или specialist)
+    roles = Column(Text, nullable=True)  # JSON массив доступных ролей: ["customer", "specialist"]
     name = Column(String, nullable=True)
     bio = Column(String, nullable=True)
     balance = Column(Integer, default=0)
     city = Column(String, nullable=True)
+    city_manual = Column(String, nullable=True)  # город, введённый вручную (если нет в списке)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
     phone = Column(String, nullable=True)
+    telegram_handle = Column(String, nullable=True)
+    whatsapp = Column(String, nullable=True)
     avatar = Column(String, nullable=True)
     portfolio = Column(Text, nullable=True)  # JSON string with portfolio items
     skills = Column(Text, nullable=True)  # JSON string with skills array
+    specialization = Column(Text, nullable=True)  # JSON массив специализаций для специалиста
+    experience_years = Column(Integer, nullable=True)  # лет опыта
+    hourly_rate = Column(Integer, nullable=True)  # ставка в час
+    education = Column(String, nullable=True)  # образование
+    company_name = Column(String, nullable=True)  # название компании (для заказчиков)
+    company_description = Column(Text, nullable=True)
+    company_logo = Column(String, nullable=True)
+    website = Column(String, nullable=True)
     verified = Column(Boolean, default=False)
     last_seen = Column(String, nullable=True)  # ISO-время последней активности
     response_credits = Column(Integer, default=5)  # оплаченные отклики (5 — стартовый бонус)
     is_pro = Column(Boolean, default=False)  # PRO-подписка: безлимит откликов + приоритет
     pro_until = Column(String, nullable=True)
+    telegram_chat_id = Column(String, nullable=True)  # ID чата Telegram для уведомлений
+    telegram_link_code = Column(String, nullable=True)  # код для привязки аккаунта
+    notification_settings = Column(Text, nullable=True)  # JSON настройки уведомлений
 
 class Transaction(Base):
     __tablename__ = "transactions"
@@ -129,6 +152,8 @@ class Response(Base):
     text = Column(String)
     proposed_price = Column(Integer, nullable=True)
     estimated_days = Column(Integer, nullable=True)
+    portfolio_items = Column(Text, nullable=True)  # JSON: [{title, image_url, description}]
+    created_at = Column(String, default=lambda: datetime.utcnow().isoformat())
 
 class Task(Base):
     __tablename__ = "tasks"
@@ -193,6 +218,85 @@ class StoredFile(Base):
     data = Column(SqlaLargeBinary)
     created_at = Column(String, default=lambda: datetime.utcnow().isoformat())
 
+# ---- Ветка «Товары»: маркетплейс товаров ----
+
+class ProductCategory(str, PyEnum):
+    electronics = "electronics"
+    clothing = "clothing"
+    home = "home"
+    beauty = "beauty"
+    kids = "kids"
+    sports = "sports"
+    auto = "auto"
+    hobby = "hobby"
+    books = "books"
+    other = "other"
+
+class ProductCondition(str, PyEnum):
+    new = "new"
+    used = "used"
+
+class ProductStatus(str, PyEnum):
+    active = "active"
+    draft = "draft"
+    sold = "sold"
+    archived = "archived"
+
+class OrderStatus(str, PyEnum):
+    pending = "pending"        # ожидает подтверждения продавца
+    confirmed = "confirmed"    # продавец подтвердил
+    shipped = "shipped"        # отправлен
+    delivered = "delivered"    # доставлен/получен
+    cancelled = "cancelled"
+
+class Product(Base):
+    __tablename__ = "products"
+    id = Column(Integer, primary_key=True, index=True)
+    seller_id = Column(Integer, index=True)
+    title = Column(String)
+    description = Column(Text, nullable=True)
+    price = Column(Integer)  # цена в рублях
+    category = Column(SqlaEnum(ProductCategory), default=ProductCategory.other, index=True)
+    condition = Column(SqlaEnum(ProductCondition), default=ProductCondition.new)
+    images = Column(Text, nullable=True)   # JSON массив URL
+    specs = Column(Text, nullable=True)    # JSON массив [{key, value}]
+    stock = Column(Integer, default=1)     # количество на складе
+    city = Column(String, nullable=True, index=True)
+    status = Column(SqlaEnum(ProductStatus), default=ProductStatus.active, index=True)
+    views = Column(Integer, default=0)
+    created_at = Column(String, default=lambda: datetime.utcnow().isoformat())
+
+class ProductOrder(Base):
+    __tablename__ = "product_orders"
+    id = Column(Integer, primary_key=True, index=True)
+    buyer_id = Column(Integer, index=True)
+    seller_id = Column(Integer, index=True)
+    product_id = Column(Integer, index=True)
+    quantity = Column(Integer, default=1)
+    total_price = Column(Integer)
+    status = Column(SqlaEnum(OrderStatus), default=OrderStatus.pending, index=True)
+    delivery_address = Column(String, nullable=True)
+    contact_phone = Column(String, nullable=True)
+    comment = Column(Text, nullable=True)
+    created_at = Column(String, default=lambda: datetime.utcnow().isoformat())
+
+class ProductFavorite(Base):
+    __tablename__ = "product_favorites"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
+    product_id = Column(Integer, index=True)
+    created_at = Column(String, default=lambda: datetime.utcnow().isoformat())
+
+class ProductReview(Base):
+    __tablename__ = "product_reviews"
+    id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(Integer, index=True)
+    author_id = Column(Integer, index=True)
+    order_id = Column(Integer, nullable=True)
+    rating = Column(Integer)
+    comment = Column(Text, nullable=True)
+    created_at = Column(String, default=lambda: datetime.utcnow().isoformat())
+
 Base.metadata.create_all(bind=engine)
 
 def _run_column_migrations():
@@ -207,6 +311,26 @@ def _run_column_migrations():
         f"ALTER TABLE users ADD COLUMN {ck}response_credits INTEGER DEFAULT 5",
         f"ALTER TABLE users ADD COLUMN {ck}is_pro BOOLEAN DEFAULT false",
         f"ALTER TABLE users ADD COLUMN {ck}pro_until VARCHAR",
+        f"ALTER TABLE responses ADD COLUMN {ck}portfolio_items TEXT",
+        f"ALTER TABLE responses ADD COLUMN {ck}created_at VARCHAR",
+        f"ALTER TABLE users ADD COLUMN {ck}active_role VARCHAR",
+        f"ALTER TABLE users ADD COLUMN {ck}roles TEXT",
+        f"ALTER TABLE users ADD COLUMN {ck}city_manual VARCHAR",
+        f"ALTER TABLE users ADD COLUMN {ck}telegram_handle VARCHAR",
+        f"ALTER TABLE users ADD COLUMN {ck}whatsapp VARCHAR",
+        f"ALTER TABLE users ADD COLUMN {ck}specialization TEXT",
+        f"ALTER TABLE users ADD COLUMN {ck}experience_years INTEGER",
+        f"ALTER TABLE users ADD COLUMN {ck}hourly_rate INTEGER",
+        f"ALTER TABLE users ADD COLUMN {ck}education VARCHAR",
+        f"ALTER TABLE users ADD COLUMN {ck}company_name VARCHAR",
+        f"ALTER TABLE users ADD COLUMN {ck}company_description TEXT",
+        f"ALTER TABLE users ADD COLUMN {ck}company_logo VARCHAR",
+        f"ALTER TABLE users ADD COLUMN {ck}website VARCHAR",
+        f"ALTER TABLE users ADD COLUMN {ck}latitude REAL",
+        f"ALTER TABLE users ADD COLUMN {ck}longitude REAL",
+        f"ALTER TABLE users ADD COLUMN {ck}telegram_chat_id VARCHAR",
+        f"ALTER TABLE users ADD COLUMN {ck}telegram_link_code VARCHAR",
+        f"ALTER TABLE users ADD COLUMN {ck}notification_settings TEXT",
     ]
     for m in migrations:
         with engine.connect() as conn:  # своя транзакция на каждую миграцию
@@ -215,6 +339,19 @@ def _run_column_migrations():
                 conn.commit()
             except Exception:
                 conn.rollback()  # колонка уже существует (SQLite)
+
+    # Бэкфилл: у старых пользователей roles/active_role пустые — заполняем из основной роли
+    with engine.connect() as conn:
+        try:
+            conn.execute(text(
+                "UPDATE users SET active_role = role WHERE active_role IS NULL"
+            ))
+            conn.execute(text(
+                "UPDATE users SET roles = '[\"' || role || '\"]' WHERE roles IS NULL"
+            ))
+            conn.commit()
+        except Exception:
+            conn.rollback()
 
 _run_column_migrations()
 
@@ -235,7 +372,7 @@ app = FastAPI(title="ProfiClone API - YouDo Edition")
 
 # CORS: явный whitelist источников вместо "*".
 # ALLOWED_ORIGINS — список через запятую; по умолчанию локальный фронт Vite.
-_default_origins = "http://localhost:5173,http://127.0.0.1:5173"
+_default_origins = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://localhost:5175"
 _frontend_url = os.environ.get("FRONTEND_URL")
 _origins_env = os.environ.get("ALLOWED_ORIGINS", _default_origins)
 allowed_origins = [o.strip() for o in _origins_env.split(",") if o.strip()]
@@ -400,15 +537,29 @@ class ProfileUpdate(BaseModel):
     name: Optional[str] = None
     bio: Optional[str] = None
     city: Optional[str] = None
+    city_manual: Optional[str] = None
     phone: Optional[str] = None
+    telegram_handle: Optional[str] = None
+    whatsapp: Optional[str] = None
     avatar: Optional[str] = None
     skills: Optional[str] = None  # JSON string
     portfolio: Optional[str] = None  # JSON string
+    specialization: Optional[str] = None  # JSON string
+    experience_years: Optional[int] = None
+    hourly_rate: Optional[int] = None
+    education: Optional[str] = None
+    company_name: Optional[str] = None
+    company_description: Optional[str] = None
+    company_logo: Optional[str] = None
+    website: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 class ResponseCreate(BaseModel):
     text: str
     proposed_price: Optional[int] = None
     estimated_days: Optional[int] = None
+    portfolio_items: Optional[str] = None  # JSON: [{title, image_url, description}]
 
 class DepositRequest(BaseModel):
     amount: int
@@ -417,13 +568,74 @@ class ReviewCreate(BaseModel):
     rating: int = Field(ge=1, le=5)
     comment: str = ""
 
+# --- Товары: схемы ---
+class ProductCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    description: Optional[str] = None
+    price: int = Field(ge=0)
+    category: ProductCategory = ProductCategory.other
+    condition: ProductCondition = ProductCondition.new
+    images: Optional[str] = None    # JSON массив URL
+    specs: Optional[str] = None     # JSON массив [{key, value}]
+    stock: int = Field(default=1, ge=0)
+    city: Optional[str] = None
+    status: ProductStatus = ProductStatus.active
+
+class ProductUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=200)
+    description: Optional[str] = None
+    price: Optional[int] = Field(default=None, ge=0)
+    category: Optional[ProductCategory] = None
+    condition: Optional[ProductCondition] = None
+    images: Optional[str] = None
+    specs: Optional[str] = None
+    stock: Optional[int] = Field(default=None, ge=0)
+    city: Optional[str] = None
+    status: Optional[ProductStatus] = None
+
+class ProductOrderCreate(BaseModel):
+    quantity: int = Field(default=1, ge=1)
+    delivery_address: Optional[str] = None
+    contact_phone: Optional[str] = None
+    comment: Optional[str] = None
+
+class ProductReviewCreate(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    comment: str = ""
+
+# --- Роли: helpers ---
+def get_user_roles(user) -> list:
+    """Список доступных ролей пользователя. Если roles пуст — берём основную роль."""
+    if user.roles:
+        try:
+            parsed = json.loads(user.roles)
+            if isinstance(parsed, list) and parsed:
+                return parsed
+        except Exception:
+            pass
+    return [user.role.value if hasattr(user.role, "value") else str(user.role)]
+
+def get_active_role(user) -> str:
+    """Текущая активная роль. Fallback на основную роль."""
+    if user.active_role:
+        return user.active_role.value if hasattr(user.active_role, "value") else str(user.active_role)
+    return user.role.value if hasattr(user.role, "value") else str(user.role)
+
 # Routes
 @app.post("/register/")
 def register(user: UserCreate, request: Request, db: Session = Depends(get_db)):
     rate_limit(request, "register", limit=5, window_sec=3600)
     if db.query(User).filter(User.email == user.email).first():
         raise HTTPException(400, "Email занят")
-    new_user = User(email=user.email, hashed_password=hash_password(user.password), role=user.role, name=user.name)
+    role_value = user.role.value if hasattr(user.role, "value") else str(user.role)
+    new_user = User(
+        email=user.email,
+        hashed_password=hash_password(user.password),
+        role=user.role,
+        active_role=user.role,
+        roles=json.dumps([role_value]),
+        name=user.name,
+    )
     db.add(new_user)
     db.commit()
     return {"message": "Успех", "user_id": new_user.id}
@@ -434,8 +646,9 @@ def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), db: Ses
     user = db.query(User).filter(User.email == form.username).first()
     if not user or not verify_password(form.password, user.hashed_password):
         raise HTTPException(401, "Ошибка")
-    token = jwt.encode({"sub": str(user.id), "role": user.role, "exp": datetime.utcnow() + timedelta(days=1)}, SECRET_KEY, algorithm=ALGORITHM)
-    return {"access_token": token, "token_type": "bearer", "role": user.role}
+    active = get_active_role(user)
+    token = jwt.encode({"sub": str(user.id), "role": active, "exp": datetime.utcnow() + timedelta(days=1)}, SECRET_KEY, algorithm=ALGORITHM)
+    return {"access_token": token, "token_type": "bearer", "role": active, "roles": get_user_roles(user)}
 
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
@@ -669,6 +882,14 @@ def get_tasks(
 
     return query.all()
 
+@app.get("/tasks/cities")
+def get_task_cities(db: Session = Depends(get_db)):
+    """Список уникальных городов из существующих задач — для фильтра ленты.
+    Включает города, введённые вручную (которых нет в статичном списке фронта)."""
+    rows = db.query(Task.city).filter(Task.city.isnot(None), Task.city != "").distinct().all()
+    cities = sorted({r[0].strip() for r in rows if r[0] and r[0].strip()})
+    return {"cities": cities}
+
 @app.get("/tasks/{task_id}")
 def get_task_detail(task_id: int, db: Session = Depends(get_db)):
     task = db.query(Task).filter(Task.id == task_id).first()
@@ -723,13 +944,16 @@ def get_public_profile(user_id: int, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(404, "Пользователь не найден")
+    # Публичная роль — активная роль пользователя (учитывает мультиролевой режим)
+    active = get_active_role(user)
+    is_specialist_view = active == "specialist"
     # Отзывы ЧЕЛОВЕКУ: специалисту — про его работу, заказчику — про него как заказчика
-    review_target = "specialist" if user.role == UserRole.specialist else "customer"
+    review_target = "specialist" if is_specialist_view else "customer"
     rating = None
     reviews = db.query(Review).filter(Review.specialist_id == user.id, Review.target == review_target).all()
     if reviews:
         rating = round(sum(r.rating for r in reviews) / len(reviews), 1)
-    if user.role == UserRole.specialist:
+    if is_specialist_view:
         completed_tasks = db.query(Task).filter(
             Task.executor_id == user.id,
             Task.status == TaskStatus.completed
@@ -741,7 +965,7 @@ def get_public_profile(user_id: int, db: Session = Depends(get_db)):
         ).count()
     return {
         "id": user.id,
-        "role": user.role,
+        "role": active,
         "name": user.name,
         "bio": user.bio,
         "rating": rating,
@@ -749,6 +973,15 @@ def get_public_profile(user_id: int, db: Session = Depends(get_db)):
         "avatar": user.avatar,
         "portfolio": user.portfolio,
         "skills": user.skills,
+        "specialization": user.specialization,
+        "experience_years": user.experience_years,
+        "hourly_rate": user.hourly_rate,
+        "education": user.education,
+        "company_name": user.company_name,
+        "company_description": user.company_description,
+        "website": user.website,
+        "telegram_handle": user.telegram_handle,
+        "whatsapp": user.whatsapp,
         "verified": user.verified,
         "is_pro": user.is_pro,
         "completed_tasks": completed_tasks,
@@ -788,9 +1021,12 @@ def get_profile(token: str = Depends(oauth2_scheme), db: Session = Depends(get_d
     if not user:
         raise HTTPException(404, "Пользователь не найден")
 
+    roles = get_user_roles(user)
+    active = get_active_role(user)
+
     rating = None
     completed_tasks = 0
-    if user.role == UserRole.specialist:
+    if "specialist" in roles:
         reviews = db.query(Review).filter(Review.specialist_id == user.id).all()
         if reviews:
             rating = round(sum(r.rating for r in reviews) / len(reviews), 1)
@@ -802,16 +1038,29 @@ def get_profile(token: str = Depends(oauth2_scheme), db: Session = Depends(get_d
     return {
         "id": user.id,
         "email": user.email,
-        "role": user.role,
+        "role": active,               # активная роль (для обратной совместимости)
+        "active_role": active,
+        "roles": roles,
         "name": user.name,
         "bio": user.bio,
         "rating": rating,
         "balance": user.balance,
         "city": user.city,
+        "city_manual": user.city_manual,
         "phone": user.phone,
+        "telegram_handle": user.telegram_handle,
+        "whatsapp": user.whatsapp,
         "avatar": user.avatar,
         "portfolio": user.portfolio,
         "skills": user.skills,
+        "specialization": user.specialization,
+        "experience_years": user.experience_years,
+        "hourly_rate": user.hourly_rate,
+        "education": user.education,
+        "company_name": user.company_name,
+        "company_description": user.company_description,
+        "company_logo": user.company_logo,
+        "website": user.website,
         "verified": user.verified,
         "completed_tasks": completed_tasks,
         "response_credits": user.response_credits,
@@ -829,16 +1078,222 @@ def update_profile(profile: ProfileUpdate, token: str = Depends(oauth2_scheme), 
         user.bio = profile.bio
     if profile.city is not None:
         user.city = profile.city
+        # Автоматический геокодинг города пользователя (если координаты не переданы явно)
+        if profile.latitude is None or profile.longitude is None:
+            coords = geocode_address(profile.city)
+            if coords:
+                user.latitude, user.longitude = coords
+    if profile.city_manual is not None:
+        user.city_manual = profile.city_manual
     if profile.phone is not None:
         user.phone = profile.phone
+    if profile.telegram_handle is not None:
+        user.telegram_handle = profile.telegram_handle
+    if profile.whatsapp is not None:
+        user.whatsapp = profile.whatsapp
     if profile.avatar is not None:
         user.avatar = profile.avatar
     if profile.skills is not None:
         user.skills = profile.skills
     if profile.portfolio is not None:
         user.portfolio = profile.portfolio
+    if profile.specialization is not None:
+        user.specialization = profile.specialization
+    if profile.experience_years is not None:
+        user.experience_years = profile.experience_years
+    if profile.hourly_rate is not None:
+        user.hourly_rate = profile.hourly_rate
+    if profile.education is not None:
+        user.education = profile.education
+    if profile.company_name is not None:
+        user.company_name = profile.company_name
+    if profile.company_description is not None:
+        user.company_description = profile.company_description
+    if profile.company_logo is not None:
+        user.company_logo = profile.company_logo
+    if profile.website is not None:
+        user.website = profile.website
+    # Если координаты переданы явно (GPS из браузера), сохраняем как есть
+    if profile.latitude is not None:
+        user.latitude = profile.latitude
+    if profile.longitude is not None:
+        user.longitude = profile.longitude
     db.commit()
     return {"message": "Профиль обновлен"}
+
+# ---- Переключение и добавление ролей ----
+
+class RoleSwitch(BaseModel):
+    role: UserRole
+
+@app.post("/users/me/switch-role")
+def switch_role(payload_body: RoleSwitch, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    """Переключить активную роль. Роль должна быть уже доступна пользователю."""
+    payload = decode_token_or_401(token)
+    user = db.query(User).filter(User.id == int(payload.get("sub"))).first()
+    if not user:
+        raise HTTPException(404, "Пользователь не найден")
+    target = payload_body.role.value if hasattr(payload_body.role, "value") else str(payload_body.role)
+    roles = get_user_roles(user)
+    if target not in roles:
+        raise HTTPException(400, "Эта роль вам недоступна. Сначала добавьте её.")
+    user.active_role = payload_body.role
+    db.commit()
+    # Новый токен с обновлённой активной ролью
+    new_token = jwt.encode(
+        {"sub": str(user.id), "role": target, "exp": datetime.utcnow() + timedelta(days=1)},
+        SECRET_KEY, algorithm=ALGORITHM,
+    )
+    return {"access_token": new_token, "token_type": "bearer", "role": target, "roles": roles}
+
+@app.post("/users/me/add-role")
+def add_role(payload_body: RoleSwitch, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    """Добавить новую роль (стать исполнителем/заказчиком) и сразу переключиться на неё."""
+    payload = decode_token_or_401(token)
+    user = db.query(User).filter(User.id == int(payload.get("sub"))).first()
+    if not user:
+        raise HTTPException(404, "Пользователь не найден")
+    target = payload_body.role.value if hasattr(payload_body.role, "value") else str(payload_body.role)
+    roles = get_user_roles(user)
+    if target not in roles:
+        roles.append(target)
+        user.roles = json.dumps(roles)
+    user.active_role = payload_body.role
+    db.commit()
+    new_token = jwt.encode(
+        {"sub": str(user.id), "role": target, "exp": datetime.utcnow() + timedelta(days=1)},
+        SECRET_KEY, algorithm=ALGORITHM,
+    )
+    return {"access_token": new_token, "token_type": "bearer", "role": target, "roles": roles}
+
+# ---- Геокодинг ----
+
+class ReverseGeocodeRequest(BaseModel):
+    latitude: float
+    longitude: float
+
+@app.post("/geocode/reverse")
+def reverse_geocode_endpoint(data: ReverseGeocodeRequest):
+    """Преобразовать координаты в адрес (для кнопки 'Моё местоположение')"""
+    from geocoding import reverse_geocode
+    address = reverse_geocode(data.latitude, data.longitude)
+    if not address:
+        raise HTTPException(404, "Не удалось определить адрес")
+    return {"address": address}
+
+# ---- Telegram уведомления ----
+
+@app.post("/telegram/generate-link-code")
+def generate_telegram_link_code(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    """Генерирует уникальный код для привязки Telegram-аккаунта"""
+    import secrets
+    payload = decode_token_or_401(token)
+    user_id = int(payload.get("sub"))
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(404, "Пользователь не найден")
+
+    # Генерируем 6-значный код
+    code = ''.join([str(secrets.randbelow(10)) for _ in range(6)])
+    user.telegram_link_code = code
+    db.commit()
+
+    return {"code": code}
+
+@app.post("/telegram/link")
+def link_telegram_account(code: str, chat_id: str, db: Session = Depends(get_db)):
+    """Привязывает Telegram chat_id к пользователю по коду (вызывается ботом)"""
+    user = db.query(User).filter(User.telegram_link_code == code).first()
+    if not user:
+        raise HTTPException(404, "Неверный код привязки")
+
+    user.telegram_chat_id = chat_id
+    user.telegram_link_code = None  # код одноразовый
+
+    # Настройки уведомлений по умолчанию (всё включено)
+    if not user.notification_settings:
+        default_settings = {
+            "new_response": True,
+            "response_accepted": True,
+            "new_message": True,
+            "task_completed": True,
+            "new_review": True,
+        }
+        user.notification_settings = json.dumps(default_settings)
+
+    db.commit()
+    return {"success": True, "user_name": user.name or user.email}
+
+@app.get("/telegram/settings")
+def get_notification_settings(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    """Получить настройки уведомлений"""
+    payload = decode_token_or_401(token)
+    user_id = int(payload.get("sub"))
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(404, "Пользователь не найден")
+
+    settings = json.loads(user.notification_settings) if user.notification_settings else {
+        "new_response": True,
+        "response_accepted": True,
+        "new_message": True,
+        "task_completed": True,
+        "new_review": True,
+    }
+
+    return {
+        "telegram_connected": bool(user.telegram_chat_id),
+        "settings": settings
+    }
+
+class NotificationSettingsUpdate(BaseModel):
+    new_response: Optional[bool] = None
+    response_accepted: Optional[bool] = None
+    new_message: Optional[bool] = None
+    task_completed: Optional[bool] = None
+    new_review: Optional[bool] = None
+
+@app.put("/telegram/settings")
+def update_notification_settings(data: NotificationSettingsUpdate, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    """Обновить настройки уведомлений"""
+    payload = decode_token_or_401(token)
+    user_id = int(payload.get("sub"))
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(404, "Пользователь не найден")
+
+    current = json.loads(user.notification_settings) if user.notification_settings else {}
+
+    if data.new_response is not None:
+        current["new_response"] = data.new_response
+    if data.response_accepted is not None:
+        current["response_accepted"] = data.response_accepted
+    if data.new_message is not None:
+        current["new_message"] = data.new_message
+    if data.task_completed is not None:
+        current["task_completed"] = data.task_completed
+    if data.new_review is not None:
+        current["new_review"] = data.new_review
+
+    user.notification_settings = json.dumps(current)
+    db.commit()
+
+    return {"success": True, "settings": current}
+
+@app.delete("/telegram/unlink")
+def unlink_telegram(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    """Отвязать Telegram от аккаунта"""
+    payload = decode_token_or_401(token)
+    user_id = int(payload.get("sub"))
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(404, "Пользователь не найден")
+
+    user.telegram_chat_id = None
+    user.telegram_link_code = None
+    db.commit()
+
+    return {"success": True}
 
 # ---- Кабинет пользователя: мои заказы и отклики ----
 
@@ -893,7 +1348,7 @@ def my_responses(task_status: Optional[TaskStatus] = None, limit: int = 50, offs
             "estimated_days": r.estimated_days,
             "task_status": task.status if task else None,
             "customer_name": customer.name if customer else None,
-            "created_at": datetime.utcnow().isoformat()
+            "created_at": r.created_at or datetime.utcnow().isoformat()
         })
     return {"responses": result, "total": total}
 
@@ -980,7 +1435,7 @@ def buy_package(req: BuyPackageRequest, token: str = Depends(oauth2_scheme), db:
 
     payload = decode_token_or_401(token)
     user = db.query(User).filter(User.id == int(payload.get("sub"))).first()
-    if user.role != UserRole.specialist:
+    if "specialist" not in get_user_roles(user):
         raise HTTPException(403, "Пакеты доступны только специалистам")
     if (user.balance or 0) < pkg["price"]:
         raise HTTPException(400, f"Недостаточно средств: нужно {pkg['price']} ₽. Пополните баланс.")
@@ -1117,6 +1572,22 @@ def assign_task(task_id: int, specialist_id: int, background: BackgroundTasks, t
         f"Здравствуйте!\n\nЗаказчик назначил вас исполнителем задачи «{task.title}».\n\n"
         f"Открыть заказ: {os.environ.get('FRONTEND_URL', 'https://delo-jhcy.onrender.com')}/task/{task.id}"
     )
+
+    # Telegram уведомление специалисту
+    if spec.telegram_chat_id:
+        try:
+            settings = json.loads(spec.notification_settings) if spec.notification_settings else {}
+            if settings.get("response_accepted", True):
+                from telegram_bot import notify_response_accepted
+                notify_response_accepted(
+                    spec.telegram_chat_id,
+                    task.title,
+                    customer.name or customer.email,
+                    task.id
+                )
+        except Exception as e:
+            print(f"Ошибка отправки Telegram: {e}")
+
     return {"message": "Исполнитель назначен"}
 
 @app.put("/tasks/{task_id}/complete")
@@ -1149,6 +1620,18 @@ def complete_task(task_id: int, token: str = Depends(oauth2_scheme), db: Session
             text=f"Заказчик завершил задачу \"{task.title}\". Средства зачислены на баланс.",
             task_id=task.id
         ))
+
+        # Telegram уведомление специалисту
+        spec = db.query(User).filter(User.id == task.executor_id).first()
+        if spec and spec.telegram_chat_id:
+            try:
+                settings = json.loads(spec.notification_settings) if spec.notification_settings else {}
+                if settings.get("task_completed", True):
+                    from telegram_bot import notify_task_completed
+                    notify_task_completed(spec.telegram_chat_id, task.title, "customer", task.id)
+            except Exception as e:
+                print(f"Ошибка отправки Telegram: {e}")
+
     db.commit()
     return {"message": "Заказ завершен"}
 
@@ -1183,7 +1666,8 @@ def create_response(task_id: int, response: ResponseCreate, background: Backgrou
         specialist_id=specialist_id,
         text=response.text,
         proposed_price=response.proposed_price,
-        estimated_days=response.estimated_days
+        estimated_days=response.estimated_days,
+        portfolio_items=response.portfolio_items
     )
     db.add(new_response)
 
@@ -1204,13 +1688,36 @@ def create_response(task_id: int, response: ResponseCreate, background: Backgrou
                 + (f"\nПредложенная цена: {response.proposed_price} ₽" if response.proposed_price else "")
                 + f"\n\nОткрыть отклики: {os.environ.get('FRONTEND_URL', 'https://delo-jhcy.onrender.com')}/task/{task_id}"
             )
+
+            # Telegram уведомление
+            if customer.telegram_chat_id:
+                try:
+                    settings = json.loads(customer.notification_settings) if customer.notification_settings else {}
+                    if settings.get("new_response", True):
+                        from telegram_bot import notify_new_response
+                        notify_new_response(
+                            customer.telegram_chat_id,
+                            task.title,
+                            specialist.name or specialist.email,
+                            task_id
+                        )
+                except Exception as e:
+                    print(f"Ошибка отправки Telegram: {e}")
     db.commit()
     if not specialist.is_pro:
         db.commit()  # фиксируем списание отклика
     return {"message": "Отклик отправлен", "credits_left": None if specialist.is_pro else specialist.response_credits}
 
 @app.get("/tasks/{task_id}/responses")
-def get_task_responses(task_id: int, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+def get_task_responses(
+    task_id: int,
+    sort_by: Optional[str] = None,  # "price_asc", "price_desc", "rating", "pro"
+    min_price: Optional[int] = None,
+    max_price: Optional[int] = None,
+    only_pro: bool = False,
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+):
     payload = decode_token_or_401(token)
     task = db.query(Task).filter(Task.id == task_id).first()
     if not task:
@@ -1218,6 +1725,8 @@ def get_task_responses(task_id: int, token: str = Depends(oauth2_scheme), db: Se
 
     responses = db.query(Response).filter(Response.task_id == task_id).all()
     result = []
+    prices = []
+
     for r in responses:
         spec = db.query(User).filter(User.id == r.specialist_id).first()
         rating = None
@@ -1231,6 +1740,24 @@ def get_task_responses(task_id: int, token: str = Depends(oauth2_scheme), db: Se
                 Task.status == TaskStatus.completed
             ).count()
 
+        # Фильтры
+        if only_pro and (not spec or not spec.is_pro):
+            continue
+        if min_price is not None and (r.proposed_price is None or r.proposed_price < min_price):
+            continue
+        if max_price is not None and (r.proposed_price is None or r.proposed_price > max_price):
+            continue
+
+        portfolio_items = []
+        if r.portfolio_items:
+            try:
+                portfolio_items = json.loads(r.portfolio_items)
+            except:
+                portfolio_items = []
+
+        if r.proposed_price is not None:
+            prices.append(r.proposed_price)
+
         result.append({
             "id": r.id,
             "text": r.text,
@@ -1243,12 +1770,32 @@ def get_task_responses(task_id: int, token: str = Depends(oauth2_scheme), db: Se
             "specialist_city": spec.city if spec else None,
             "specialist_online": user_online(spec) if spec else False,
             "specialist_pro": spec.is_pro if spec else False,
+            "specialist_avatar": spec.avatar if spec else None,
             "proposed_price": r.proposed_price,
-            "estimated_days": r.estimated_days
+            "estimated_days": r.estimated_days,
+            "portfolio_items": portfolio_items,
+            "created_at": r.created_at or datetime.utcnow().isoformat()
         })
-    # PRO-исполнители — первыми в списке
-    result.sort(key=lambda x: (not x["specialist_pro"], -(x["specialist_rating"] or 0)))
-    return result
+
+    # Сортировка
+    if sort_by == "price_asc":
+        result.sort(key=lambda x: x["proposed_price"] if x["proposed_price"] is not None else float('inf'))
+    elif sort_by == "price_desc":
+        result.sort(key=lambda x: x["proposed_price"] if x["proposed_price"] is not None else float('-inf'), reverse=True)
+    elif sort_by == "rating":
+        result.sort(key=lambda x: x["specialist_rating"] if x["specialist_rating"] is not None else 0, reverse=True)
+    else:
+        # По умолчанию: PRO первыми, затем по рейтингу
+        result.sort(key=lambda x: (not x["specialist_pro"], -(x["specialist_rating"] or 0)))
+
+    # Средняя цена откликов
+    avg_price = round(sum(prices) / len(prices)) if prices else None
+
+    return {
+        "responses": result,
+        "total": len(result),
+        "avg_price": avg_price
+    }
 
 @app.post("/tasks/{task_id}/review")
 def create_review(task_id: int, review: ReviewCreate, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
@@ -1287,6 +1834,24 @@ def create_review(task_id: int, review: ReviewCreate, token: str = Depends(oauth
     )
     db.add(new_review)
     db.commit()
+
+    # Telegram уведомление получателю отзыва
+    reviewee = db.query(User).filter(User.id == reviewee_id).first()
+    if reviewee and reviewee.telegram_chat_id:
+        try:
+            settings = json.loads(reviewee.notification_settings) if reviewee.notification_settings else {}
+            if settings.get("new_review", True):
+                reviewer = db.query(User).filter(User.id == user_id).first()
+                from telegram_bot import notify_new_review
+                notify_new_review(
+                    reviewee.telegram_chat_id,
+                    review.rating,
+                    review.comment or "",
+                    reviewer.name or reviewer.email if reviewer else "Пользователь"
+                )
+        except Exception as e:
+            print(f"Ошибка отправки Telegram: {e}")
+
     return {"message": "Отзыв успешно добавлен"}
 
 @app.websocket("/ws/tasks/{task_id}")
@@ -1413,6 +1978,22 @@ async def post_message(task_id: int, message: MessageCreate, background: Backgro
                 f"Ответить: {os.environ.get('FRONTEND_URL', 'https://delo-jhcy.onrender.com')}/task/{task_id}"
             )
 
+            # Telegram уведомление получателю
+            if recipient.telegram_chat_id:
+                try:
+                    settings = json.loads(recipient.notification_settings) if recipient.notification_settings else {}
+                    if settings.get("new_message", True):
+                        from telegram_bot import notify_new_message
+                        notify_new_message(
+                            recipient.telegram_chat_id,
+                            task.title,
+                            sender.name or sender.email,
+                            message.text,
+                            task_id
+                        )
+                except Exception as e:
+                    print(f"Ошибка отправки Telegram: {e}")
+
     sender = db.query(User).filter(User.id == user_id).first()
     message_dict = {
         "id": new_message.id,
@@ -1522,7 +2103,7 @@ async def upload_portfolio(request: Request, file: UploadFile = File(...), token
     user_id = int(payload.get("sub"))
 
     user = db.query(User).filter(User.id == user_id).first()
-    if user.role != UserRole.specialist:
+    if "specialist" not in get_user_roles(user):
         raise HTTPException(403, "Only specialists can upload portfolio")
 
     file_id = save_file_to_db(db, file)
@@ -1608,3 +2189,387 @@ def get_cities():
         "Омск", "Ростов-на-Дону", "Уфа", "Красноярск",
         "Воронеж", "Пермь", "Волгоград", "Краснодар"
     ]
+
+# ==================== ВЕТКА «ТОВАРЫ» ====================
+
+def _enum_val(v):
+    return v.value if hasattr(v, "value") else v
+
+def serialize_product(p: Product, db: Session, include_seller: bool = True) -> dict:
+    data = {
+        "id": p.id,
+        "seller_id": p.seller_id,
+        "title": p.title,
+        "description": p.description,
+        "price": p.price,
+        "category": _enum_val(p.category),
+        "condition": _enum_val(p.condition),
+        "images": p.images,
+        "specs": p.specs,
+        "stock": p.stock,
+        "city": p.city,
+        "status": _enum_val(p.status),
+        "views": p.views,
+        "created_at": p.created_at,
+    }
+    if include_seller:
+        seller = db.query(User).filter(User.id == p.seller_id).first()
+        data["seller_name"] = (seller.name if seller and seller.name else "Продавец") if seller else "Продавец"
+        data["seller_avatar"] = seller.avatar if seller else None
+        # Рейтинг продавца по отзывам о его товарах
+        prod_ids = [row[0] for row in db.query(Product.id).filter(Product.seller_id == p.seller_id).all()]
+        if prod_ids:
+            revs = db.query(ProductReview).filter(ProductReview.product_id.in_(prod_ids)).all()
+            data["seller_rating"] = round(sum(r.rating for r in revs) / len(revs), 1) if revs else None
+            data["seller_reviews_count"] = len(revs)
+        else:
+            data["seller_rating"] = None
+            data["seller_reviews_count"] = 0
+    return data
+
+@app.get("/products")
+def list_products(
+    category: Optional[ProductCategory] = None,
+    city: Optional[str] = None,
+    condition: Optional[ProductCondition] = None,
+    search: Optional[str] = None,
+    price_min: Optional[int] = None,
+    price_max: Optional[int] = None,
+    sort: str = "new",  # new | price_asc | price_desc | popular
+    seller_id: Optional[int] = None,
+    limit: int = 24,
+    offset: int = 0,
+    response: FastResponse = None,
+    db: Session = Depends(get_db),
+):
+    """Каталог товаров с фильтрами. По умолчанию только активные."""
+    query = db.query(Product).filter(Product.status == ProductStatus.active)
+    if seller_id is not None:
+        # Для витрины конкретного продавца показываем только активные (управление — отдельный эндпоинт)
+        query = query.filter(Product.seller_id == seller_id)
+    if category:
+        query = query.filter(Product.category == category)
+    if city:
+        query = query.filter(Product.city == city)
+    if condition:
+        query = query.filter(Product.condition == condition)
+    if price_min is not None:
+        query = query.filter(Product.price >= price_min)
+    if price_max is not None:
+        query = query.filter(Product.price <= price_max)
+    if search:
+        like = f"%{search}%"
+        query = query.filter((Product.title.ilike(like)) | (Product.description.ilike(like)))
+
+    if sort == "price_asc":
+        query = query.order_by(Product.price.asc())
+    elif sort == "price_desc":
+        query = query.order_by(Product.price.desc())
+    elif sort == "popular":
+        query = query.order_by(Product.views.desc())
+    else:
+        query = query.order_by(Product.id.desc())
+
+    total = query.count()
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
+        response.headers["Access-Control-Expose-Headers"] = "X-Total-Count"
+
+    limit = max(1, min(limit, 60))
+    offset = max(0, offset)
+    products = query.offset(offset).limit(limit).all()
+    return [serialize_product(p, db) for p in products]
+
+@app.get("/products/cities")
+def product_cities(db: Session = Depends(get_db)):
+    """Города из активных товаров — для фильтра каталога."""
+    rows = db.query(Product.city).filter(
+        Product.city.isnot(None), Product.city != "", Product.status == ProductStatus.active
+    ).distinct().all()
+    cities = sorted({r[0].strip() for r in rows if r[0] and r[0].strip()})
+    return {"cities": cities}
+
+@app.get("/products/mine")
+def my_products(status: Optional[ProductStatus] = None, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    """Мои товары (для продавца) — все статусы или конкретный."""
+    payload = decode_token_or_401(token)
+    user_id = int(payload.get("sub"))
+    query = db.query(Product).filter(Product.seller_id == user_id)
+    if status:
+        query = query.filter(Product.status == status)
+    products = query.order_by(Product.id.desc()).all()
+    return [serialize_product(p, db, include_seller=False) for p in products]
+
+@app.get("/products/{product_id}")
+def get_product(product_id: int, db: Session = Depends(get_db)):
+    p = db.query(Product).filter(Product.id == product_id).first()
+    if not p:
+        raise HTTPException(404, "Товар не найден")
+    # Счётчик просмотров (грубо: +1 за каждый заход в карточку)
+    p.views = (p.views or 0) + 1
+    db.commit()
+    return serialize_product(p, db)
+
+@app.post("/products")
+def create_product(product: ProductCreate, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    """Создать товар. Доступно любому авторизованному пользователю (продавцом может быть каждый)."""
+    payload = decode_token_or_401(token)
+    user_id = int(payload.get("sub"))
+    p = Product(
+        seller_id=user_id,
+        title=product.title,
+        description=product.description,
+        price=product.price,
+        category=product.category,
+        condition=product.condition,
+        images=product.images,
+        specs=product.specs,
+        stock=product.stock,
+        city=product.city,
+        status=product.status,
+    )
+    db.add(p)
+    db.commit()
+    db.refresh(p)
+    return serialize_product(p, db, include_seller=False)
+
+@app.put("/products/{product_id}")
+def update_product(product_id: int, upd: ProductUpdate, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    payload = decode_token_or_401(token)
+    user_id = int(payload.get("sub"))
+    p = db.query(Product).filter(Product.id == product_id).first()
+    if not p:
+        raise HTTPException(404, "Товар не найден")
+    if p.seller_id != user_id:
+        raise HTTPException(403, "Это не ваш товар")
+    for field in ("title", "description", "price", "category", "condition", "images", "specs", "stock", "city", "status"):
+        val = getattr(upd, field)
+        if val is not None:
+            setattr(p, field, val)
+    db.commit()
+    db.refresh(p)
+    return serialize_product(p, db, include_seller=False)
+
+@app.delete("/products/{product_id}")
+def delete_product(product_id: int, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    payload = decode_token_or_401(token)
+    user_id = int(payload.get("sub"))
+    p = db.query(Product).filter(Product.id == product_id).first()
+    if not p:
+        raise HTTPException(404, "Товар не найден")
+    if p.seller_id != user_id:
+        raise HTTPException(403, "Это не ваш товар")
+    db.delete(p)
+    db.commit()
+    return {"message": "Товар удалён"}
+
+# ---- Избранное ----
+
+@app.get("/products/favorites/mine")
+def my_favorites(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    payload = decode_token_or_401(token)
+    user_id = int(payload.get("sub"))
+    fav_ids = [f.product_id for f in db.query(ProductFavorite).filter(ProductFavorite.user_id == user_id).all()]
+    if not fav_ids:
+        return []
+    products = db.query(Product).filter(Product.id.in_(fav_ids)).all()
+    return [serialize_product(p, db) for p in products]
+
+@app.post("/products/{product_id}/favorite")
+def toggle_favorite(product_id: int, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    """Переключить избранное. Возвращает текущее состояние."""
+    payload = decode_token_or_401(token)
+    user_id = int(payload.get("sub"))
+    p = db.query(Product).filter(Product.id == product_id).first()
+    if not p:
+        raise HTTPException(404, "Товар не найден")
+    existing = db.query(ProductFavorite).filter(
+        ProductFavorite.user_id == user_id, ProductFavorite.product_id == product_id
+    ).first()
+    if existing:
+        db.delete(existing)
+        db.commit()
+        return {"favorited": False}
+    db.add(ProductFavorite(user_id=user_id, product_id=product_id))
+    db.commit()
+    return {"favorited": True}
+
+# ---- Заказы товаров ----
+
+@app.post("/products/{product_id}/order")
+def create_product_order(product_id: int, order: ProductOrderCreate, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    payload = decode_token_or_401(token)
+    user_id = int(payload.get("sub"))
+    p = db.query(Product).filter(Product.id == product_id).first()
+    if not p:
+        raise HTTPException(404, "Товар не найден")
+    if p.status != ProductStatus.active:
+        raise HTTPException(400, "Товар недоступен для заказа")
+    if p.seller_id == user_id:
+        raise HTTPException(400, "Нельзя купить собственный товар")
+    if order.quantity > (p.stock or 0):
+        raise HTTPException(400, f"Недостаточно на складе. Доступно: {p.stock}")
+
+    total = p.price * order.quantity
+    po = ProductOrder(
+        buyer_id=user_id,
+        seller_id=p.seller_id,
+        product_id=p.id,
+        quantity=order.quantity,
+        total_price=total,
+        status=OrderStatus.pending,
+        delivery_address=order.delivery_address,
+        contact_phone=order.contact_phone,
+        comment=order.comment,
+    )
+    db.add(po)
+    # Уменьшаем остаток; если закончился — помечаем sold
+    p.stock = (p.stock or 0) - order.quantity
+    if p.stock <= 0:
+        p.status = ProductStatus.sold
+    db.commit()
+    db.refresh(po)
+
+    # Уведомление продавцу
+    db.add(Notification(
+        user_id=p.seller_id,
+        type="product_order",
+        title="Новый заказ товара",
+        text=f"Заказ на «{p.title}» × {order.quantity}",
+    ))
+    db.commit()
+    return {"id": po.id, "message": "Заказ оформлен", "total_price": total}
+
+def _serialize_product_order(po: ProductOrder, db: Session, side: str) -> dict:
+    product = db.query(Product).filter(Product.id == po.product_id).first()
+    counter_id = po.seller_id if side == "buyer" else po.buyer_id
+    counter = db.query(User).filter(User.id == counter_id).first()
+    return {
+        "id": po.id,
+        "product_id": po.product_id,
+        "product_title": product.title if product else "Товар удалён",
+        "product_image": (json.loads(product.images)[0] if product and product.images and json.loads(product.images) else None),
+        "quantity": po.quantity,
+        "total_price": po.total_price,
+        "status": _enum_val(po.status),
+        "delivery_address": po.delivery_address,
+        "contact_phone": po.contact_phone,
+        "comment": po.comment,
+        "created_at": po.created_at,
+        "counterparty_name": (counter.name if counter and counter.name else "Пользователь") if counter else "Пользователь",
+        "counterparty_id": counter_id,
+    }
+
+@app.get("/product-orders/purchases")
+def my_purchases(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    """Мои покупки (я — покупатель)."""
+    payload = decode_token_or_401(token)
+    user_id = int(payload.get("sub"))
+    orders = db.query(ProductOrder).filter(ProductOrder.buyer_id == user_id).order_by(ProductOrder.id.desc()).all()
+    return [_serialize_product_order(o, db, "buyer") for o in orders]
+
+@app.get("/product-orders/sales")
+def my_sales(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    """Мои продажи (я — продавец)."""
+    payload = decode_token_or_401(token)
+    user_id = int(payload.get("sub"))
+    orders = db.query(ProductOrder).filter(ProductOrder.seller_id == user_id).order_by(ProductOrder.id.desc()).all()
+    return [_serialize_product_order(o, db, "seller") for o in orders]
+
+@app.put("/product-orders/{order_id}/status")
+def update_order_status(order_id: int, new_status: OrderStatus, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    """Смена статуса заказа. Продавец: confirmed/shipped/cancelled. Покупатель: delivered/cancelled."""
+    payload = decode_token_or_401(token)
+    user_id = int(payload.get("sub"))
+    po = db.query(ProductOrder).filter(ProductOrder.id == order_id).first()
+    if not po:
+        raise HTTPException(404, "Заказ не найден")
+
+    seller_allowed = {OrderStatus.confirmed, OrderStatus.shipped, OrderStatus.cancelled}
+    buyer_allowed = {OrderStatus.delivered, OrderStatus.cancelled}
+    if user_id == po.seller_id and new_status in seller_allowed:
+        pass
+    elif user_id == po.buyer_id and new_status in buyer_allowed:
+        pass
+    else:
+        raise HTTPException(403, "Недопустимая смена статуса")
+
+    # Если заказ отменён — возвращаем товар на склад
+    if new_status == OrderStatus.cancelled and po.status != OrderStatus.cancelled:
+        product = db.query(Product).filter(Product.id == po.product_id).first()
+        if product:
+            product.stock = (product.stock or 0) + po.quantity
+            if product.status == ProductStatus.sold and product.stock > 0:
+                product.status = ProductStatus.active
+
+    po.status = new_status
+    db.commit()
+
+    # Уведомление второй стороне
+    notify_id = po.buyer_id if user_id == po.seller_id else po.seller_id
+    status_labels = {
+        "confirmed": "подтверждён", "shipped": "отправлен",
+        "delivered": "получен", "cancelled": "отменён",
+    }
+    db.add(Notification(
+        user_id=notify_id,
+        type="product_order_status",
+        title="Статус заказа изменён",
+        text=f"Заказ #{po.id}: {status_labels.get(_enum_val(new_status), _enum_val(new_status))}",
+    ))
+    db.commit()
+    return {"message": "Статус обновлён", "status": _enum_val(new_status)}
+
+# ---- Отзывы о товарах ----
+
+@app.get("/products/{product_id}/reviews")
+def get_product_reviews(product_id: int, db: Session = Depends(get_db)):
+    reviews = db.query(ProductReview).filter(
+        ProductReview.product_id == product_id
+    ).order_by(ProductReview.id.desc()).all()
+    result = []
+    for r in reviews:
+        author = db.query(User).filter(User.id == r.author_id).first()
+        result.append({
+            "id": r.id,
+            "rating": r.rating,
+            "comment": r.comment,
+            "author_name": (author.name if author and author.name else "Покупатель") if author else "Покупатель",
+            "author_id": r.author_id,
+            "created_at": r.created_at,
+        })
+    return result
+
+@app.post("/products/{product_id}/reviews")
+def create_product_review(product_id: int, review: ProductReviewCreate, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    payload = decode_token_or_401(token)
+    user_id = int(payload.get("sub"))
+    p = db.query(Product).filter(Product.id == product_id).first()
+    if not p:
+        raise HTTPException(404, "Товар не найден")
+    if p.seller_id == user_id:
+        raise HTTPException(400, "Нельзя оставить отзыв на свой товар")
+    # Отзыв можно оставить только по доставленному заказу
+    order = db.query(ProductOrder).filter(
+        ProductOrder.product_id == product_id,
+        ProductOrder.buyer_id == user_id,
+        ProductOrder.status == OrderStatus.delivered,
+    ).first()
+    if not order:
+        raise HTTPException(403, "Отзыв доступен только после получения заказа")
+    existing = db.query(ProductReview).filter(
+        ProductReview.product_id == product_id,
+        ProductReview.author_id == user_id,
+    ).first()
+    if existing:
+        raise HTTPException(400, "Вы уже оставили отзыв на этот товар")
+    pr = ProductReview(
+        product_id=product_id,
+        author_id=user_id,
+        order_id=order.id,
+        rating=review.rating,
+        comment=review.comment,
+    )
+    db.add(pr)
+    db.commit()
+    return {"message": "Отзыв добавлен"}

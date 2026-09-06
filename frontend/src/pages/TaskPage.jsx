@@ -3,8 +3,9 @@ import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useAuthStore } from '../store/authStore';
 import { useToast } from '../components/Toast';
-import { Lightbox } from '../components/Dialogs';
+import { Lightbox, ConfirmDialog } from '../components/Dialogs';
 import { TaskMap } from '../components/TaskMap';
+import { ResponsesTable } from '../components/ResponsesTable';
 import { getCategoryLabel } from '../lib/constants';
 import { safeUserId } from '../lib/utils';
 import { inputCls, labelCls, btnPrimary, btnGhost } from '../lib/styles';
@@ -30,8 +31,10 @@ const TaskPage = () => {
     const [responseText, setResponseText] = useState('');
     const [proposedPrice, setProposedPrice] = useState('');
     const [estimatedDays, setEstimatedDays] = useState('');
+    const [portfolioItems, setPortfolioItems] = useState([]);
     const [sending, setSending] = useState(false);
     const [confirmingDeleteImage, setConfirmingDeleteImage] = useState(null);
+    const [showResponses, setShowResponses] = useState(false);
 
     const fetchTask = () => {
         setLoading(true);
@@ -58,15 +61,18 @@ const TaskPage = () => {
                 {
                     text: responseText,
                     proposed_price: proposedPrice ? parseInt(proposedPrice) : null,
-                    estimated_days: estimatedDays ? parseInt(estimatedDays) : null
+                    estimated_days: estimatedDays ? parseInt(estimatedDays) : null,
+                    portfolio_items: portfolioItems.length > 0 ? JSON.stringify(portfolioItems) : null
                 }
             );
             toast.success('Ваш отклик успешно отправлен заказчику!' + (res.data && res.data.credits_left !== null && res.data.credits_left !== undefined ? ` Осталось откликов: ${res.data.credits_left}` : ''));
             setResponseText('');
             setProposedPrice('');
             setEstimatedDays('');
+            setPortfolioItems([]);
+            fetchTask();
         } catch (err) {
-            toast.error('Ошибка отправки отклика. Вы авторизованы?');
+            toast.error(err.response?.data?.detail || 'Ошибка отправки отклика');
         } finally {
             setSending(false);
         }
@@ -88,6 +94,30 @@ const TaskPage = () => {
         } finally {
             setConfirmingDeleteImage(null);
         }
+    };
+
+    const handleAssignSpecialist = async (specialistId) => {
+        try {
+            await api.put(`/tasks/${task.id}/assign?specialist_id=${specialistId}`);
+            toast.success('Специалист назначен! Заказ переведён в работу');
+            fetchTask();
+        } catch (err) {
+            toast.error(err.response?.data?.detail || 'Ошибка назначения специалиста');
+        }
+    };
+
+    const addPortfolioItem = () => {
+        setPortfolioItems([...portfolioItems, { title: '', image_url: '', description: '' }]);
+    };
+
+    const updatePortfolioItem = (index, field, value) => {
+        const updated = [...portfolioItems];
+        updated[index][field] = value;
+        setPortfolioItems(updated);
+    };
+
+    const removePortfolioItem = (index) => {
+        setPortfolioItems(portfolioItems.filter((_, i) => i !== index));
     };
 
     if (loading) {
@@ -203,6 +233,45 @@ const TaskPage = () => {
                                         <input type="number" value={estimatedDays} onChange={e => setEstimatedDays(e.target.value)} placeholder="7" className={inputCls} />
                                     </div>
                                 </div>
+
+                                <div className="border-t border-border pt-4">
+                                    <div className="flex items-center justify-between mb-3">
+                                        <label className={labelCls}>Прикрепить работы из портфолио (опционально)</label>
+                                        <button onClick={addPortfolioItem} className="text-xs font-bold uppercase tracking-wider text-accent hover:text-accent-bright transition">+ Добавить</button>
+                                    </div>
+                                    {portfolioItems.map((item, idx) => (
+                                        <div key={idx} className="bg-surface-2/50 rounded-lg p-3 mb-3">
+                                            <div className="flex justify-between items-start mb-2">
+                                                <span className="text-xs font-bold text-muted">Работа #{idx + 1}</span>
+                                                <button onClick={() => removePortfolioItem(idx)} className="text-danger text-sm font-bold">×</button>
+                                            </div>
+                                            <div className="grid gap-2">
+                                                <input
+                                                    type="text"
+                                                    placeholder="Название работы"
+                                                    value={item.title}
+                                                    onChange={e => updatePortfolioItem(idx, 'title', e.target.value)}
+                                                    className={`${inputCls} text-sm`}
+                                                />
+                                                <input
+                                                    type="text"
+                                                    placeholder="URL изображения"
+                                                    value={item.image_url}
+                                                    onChange={e => updatePortfolioItem(idx, 'image_url', e.target.value)}
+                                                    className={`${inputCls} text-sm`}
+                                                />
+                                                <textarea
+                                                    placeholder="Описание (опционально)"
+                                                    value={item.description}
+                                                    onChange={e => updatePortfolioItem(idx, 'description', e.target.value)}
+                                                    className={`${inputCls} text-sm`}
+                                                    rows="2"
+                                                />
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+
                                 <button onClick={handleSendResponse} disabled={sending} className={`${btnPrimary} disabled:opacity-50`}>
                                     {sending ? 'Отправка...' : 'Отправить отклик'}
                                 </button>
@@ -212,12 +281,37 @@ const TaskPage = () => {
                 )}
             </article>
 
+            {/* Отклики для заказчика */}
+            {token && isOwner && task.responses_count > 0 && (
+                <div className="mt-6">
+                    <div className="bg-surface border border-border rounded-2xl shadow-card overflow-hidden">
+                        <div className="p-6 border-b border-border">
+                            <h2 className="font-display font-bold uppercase text-xl">Отклики ({task.responses_count})</h2>
+                            <p className="text-muted text-sm mt-1">Сравните предложения и выберите лучшего специалиста</p>
+                        </div>
+                        <div className="p-6">
+                            <ResponsesTable taskId={task.id} token={token} onAssign={handleAssignSpecialist} />
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {lightbox && (
                 <Lightbox
                     images={lightbox.images}
                     index={lightbox.index}
                     onClose={() => setLightbox(null)}
                     onNavigate={(i) => setLightbox({ ...lightbox, index: i })}
+                />
+            )}
+
+            {confirmingDeleteImage && (
+                <ConfirmDialog
+                    title="Удалить фото?"
+                    message="Это действие нельзя отменить."
+                    confirmText="Удалить"
+                    onConfirm={() => handleDeleteImage(confirmingDeleteImage)}
+                    onClose={() => setConfirmingDeleteImage(null)}
                 />
             )}
         </div>

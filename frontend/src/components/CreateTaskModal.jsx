@@ -3,7 +3,8 @@ import { api } from '../lib/api';
 import { useAuthStore } from '../store/authStore';
 import { useToast } from '../components/Toast';
 import { useModalBehavior } from '../components/Dialogs';
-import { CATEGORIES, CITIES } from '../lib/constants';
+import { CATEGORIES } from '../lib/constants';
+import { CitySelect } from '../components/CitySelect';
 import { inputCls, labelCls, btnPrimary, btnGhost, modalOverlay, modalPanel } from '../lib/styles';
 
 const CreateTaskModal = ({ onClose, onTaskCreated }) => {
@@ -123,12 +124,7 @@ const CreateTaskModal = ({ onClose, onTaskCreated }) => {
                             </div>
                             <div>
                                 <label className={labelCls}>Город</label>
-                                <select value={city} onChange={e => setCity(e.target.value)} className={inputCls}>
-                                    <option value="">Выберите город</option>
-                                    {CITIES.map(c => (
-                                        <option key={c} value={c}>{c}</option>
-                                    ))}
-                                </select>
+                                <CitySelect value={city} onChange={setCity} />
                             </div>
                             <div>
                                 <label className={labelCls}>Адрес</label>

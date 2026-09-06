@@ -5,7 +5,8 @@ import { useToast } from '../components/Toast';
 import { useModalBehavior } from '../components/Dialogs';
 import { AvatarUploader, PortfolioUploader } from '../components/ImageUploader';
 import ProBadge from '../ui/ProBadge';
-import { CITIES } from '../lib/constants';
+import { CitySelect } from '../components/CitySelect';
+import { TelegramSettings } from '../components/TelegramSettings';
 import { inputCls, labelCls, btnPrimary, btnGhost, btnSignal, modalOverlay, modalPanel } from '../lib/styles';
 
 const getInitial = (name, email) => {
@@ -21,7 +22,16 @@ const ProfilePage = () => {
     const [bio, setBio] = useState('');
     const [city, setCity] = useState('');
     const [phone, setPhone] = useState('');
+    const [telegramHandle, setTelegramHandle] = useState('');
+    const [whatsapp, setWhatsapp] = useState('');
     const [skills, setSkills] = useState('');
+    const [specialization, setSpecialization] = useState('');
+    const [experienceYears, setExperienceYears] = useState('');
+    const [hourlyRate, setHourlyRate] = useState('');
+    const [education, setEducation] = useState('');
+    const [companyName, setCompanyName] = useState('');
+    const [companyDescription, setCompanyDescription] = useState('');
+    const [website, setWebsite] = useState('');
     const [email, setEmail] = useState('');
     const [msg, setMsg] = useState('');
     const [rating, setRating] = useState(null);
@@ -38,6 +48,9 @@ const ProfilePage = () => {
     const [proUntil, setProUntil] = useState(null);
     const [packages, setPackages] = useState([]);
     const [paymentProcessing, setPaymentProcessing] = useState(false);
+    const [geoLoading, setGeoLoading] = useState(false);
+    const [userLat, setUserLat] = useState(null);
+    const [userLon, setUserLon] = useState(null);
 
     const fetchProfile = () => {
         api.get('/users/me')
@@ -46,7 +59,16 @@ const ProfilePage = () => {
                 setBio(res.data.bio || '');
                 setCity(res.data.city || '');
                 setPhone(res.data.phone || '');
+                setTelegramHandle(res.data.telegram_handle || '');
+                setWhatsapp(res.data.whatsapp || '');
                 setSkills(res.data.skills || '');
+                setSpecialization(res.data.specialization || '');
+                setExperienceYears(res.data.experience_years ?? '');
+                setHourlyRate(res.data.hourly_rate ?? '');
+                setEducation(res.data.education || '');
+                setCompanyName(res.data.company_name || '');
+                setCompanyDescription(res.data.company_description || '');
+                setWebsite(res.data.website || '');
                 setEmail(res.data.email);
                 setRating(res.data.rating);
                 setBalance(res.data.balance || 0);
@@ -71,6 +93,38 @@ const ProfilePage = () => {
         } catch (err) {
             toast.error(err.response?.data?.detail || 'Ошибка покупки');
         }
+    };
+
+    const detectLocation = () => {
+        if (!navigator.geolocation) {
+            toast.error('Геолокация не поддерживается вашим браузером');
+            return;
+        }
+        setGeoLoading(true);
+        navigator.geolocation.getCurrentPosition(
+            async (position) => {
+                const { latitude, longitude } = position.coords;
+                setUserLat(latitude);
+                setUserLon(longitude);
+                try {
+                    const res = await api.post('/geocode/reverse', { latitude, longitude });
+                    const address = res.data.address;
+                    // Извлечь город из адреса (обычно формат: "Россия, Москва, ул. ...")
+                    const parts = address.split(',').map(p => p.trim());
+                    const cityCandidate = parts.length > 1 ? parts[1] : parts[0];
+                    setCity(cityCandidate);
+                    toast.success(`Определено: ${cityCandidate}`);
+                } catch (err) {
+                    toast.error('Не удалось определить адрес');
+                } finally {
+                    setGeoLoading(false);
+                }
+            },
+            (error) => {
+                setGeoLoading(false);
+                toast.error('Не удалось определить местоположение. Проверьте разрешения браузера.');
+            }
+        );
     };
 
     useEffect(() => {
@@ -114,7 +168,26 @@ const ProfilePage = () => {
     const handleSave = async (e) => {
         e.preventDefault();
         try {
-            await api.put('/users/me', { name, bio, city, phone, skills });
+            const payload = {
+                name, bio, city, phone,
+                telegram_handle: telegramHandle,
+                whatsapp,
+                skills,
+            };
+            // Добавляем координаты, если они были определены через GPS
+            if (userLat !== null) payload.latitude = userLat;
+            if (userLon !== null) payload.longitude = userLon;
+            if (role === 'specialist') {
+                payload.specialization = specialization;
+                payload.experience_years = experienceYears !== '' ? parseInt(experienceYears) : null;
+                payload.hourly_rate = hourlyRate !== '' ? parseInt(hourlyRate) : null;
+                payload.education = education;
+            } else {
+                payload.company_name = companyName;
+                payload.company_description = companyDescription;
+                payload.website = website;
+            }
+            await api.put('/users/me', payload);
             setMsg('Профиль успешно сохранен!');
             setTimeout(() => setMsg(''), 3000);
         } catch (err) {
@@ -281,31 +354,94 @@ const ProfilePage = () => {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                             <label className={labelCls}>Город</label>
-                            <select value={city} onChange={e => setCity(e.target.value)} className={inputCls}>
-                                <option value="">Выберите город</option>
-                                {CITIES.map(c => (
-                                    <option key={c} value={c}>{c}</option>
-                                ))}
-                            </select>
+                            <div className="flex gap-2">
+                                <div className="flex-1">
+                                    <CitySelect value={city} onChange={setCity} />
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={detectLocation}
+                                    disabled={geoLoading}
+                                    className="shrink-0 rounded-xl border border-border bg-surface-2 px-4 py-2 font-bold text-sm hover:border-accent transition disabled:opacity-50"
+                                    title="Определить моё местоположение"
+                                >
+                                    {geoLoading ? '⏳' : '📍'}
+                                </button>
+                            </div>
                         </div>
                         <div>
                             <label className={labelCls}>Телефон</label>
                             <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="+7 (900) 123-45-67" className={inputCls} />
                         </div>
                     </div>
-                    {role === 'specialist' && (
+
+                    {/* Контакты для связи */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
-                            <label className={labelCls}>Навыки и специализации</label>
-                            <input type="text" value={skills} onChange={e => setSkills(e.target.value)} placeholder="HTML, CSS, JavaScript, React, Node.js" className={inputCls} />
-                            <p className="text-xs text-muted mt-1 font-semibold">Перечислите через запятую</p>
+                            <label className={labelCls}>Telegram</label>
+                            <input type="text" value={telegramHandle} onChange={e => setTelegramHandle(e.target.value)} placeholder="@username" className={inputCls} />
                         </div>
+                        <div>
+                            <label className={labelCls}>WhatsApp</label>
+                            <input type="tel" value={whatsapp} onChange={e => setWhatsapp(e.target.value)} placeholder="+7 (900) 123-45-67" className={inputCls} />
+                        </div>
+                    </div>
+
+                    {role === 'specialist' ? (
+                        <>
+                            <div>
+                                <label className={labelCls}>Навыки</label>
+                                <input type="text" value={skills} onChange={e => setSkills(e.target.value)} placeholder="HTML, CSS, JavaScript, React, Node.js" className={inputCls} />
+                                <p className="text-xs text-muted mt-1 font-semibold">Перечислите через запятую</p>
+                            </div>
+                            <div>
+                                <label className={labelCls}>Специализация</label>
+                                <input type="text" value={specialization} onChange={e => setSpecialization(e.target.value)} placeholder="Веб-разработка, Мобильные приложения" className={inputCls} />
+                                <p className="text-xs text-muted mt-1 font-semibold">Основные направления через запятую</p>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className={labelCls}>Опыт (лет)</label>
+                                    <input type="number" min="0" max="70" value={experienceYears} onChange={e => setExperienceYears(e.target.value)} placeholder="5" className={inputCls} />
+                                </div>
+                                <div>
+                                    <label className={labelCls}>Ставка (₽/час)</label>
+                                    <input type="number" min="0" value={hourlyRate} onChange={e => setHourlyRate(e.target.value)} placeholder="1500" className={inputCls} />
+                                </div>
+                            </div>
+                            <div>
+                                <label className={labelCls}>Образование</label>
+                                <input type="text" value={education} onChange={e => setEducation(e.target.value)} placeholder="МГУ, факультет ВМК" className={inputCls} />
+                            </div>
+                        </>
+                    ) : (
+                        <>
+                            <div>
+                                <label className={labelCls}>Название компании</label>
+                                <input type="text" value={companyName} onChange={e => setCompanyName(e.target.value)} placeholder="ООО «Ромашка»" className={inputCls} />
+                            </div>
+                            <div>
+                                <label className={labelCls}>Сайт компании</label>
+                                <input type="url" value={website} onChange={e => setWebsite(e.target.value)} placeholder="https://example.com" className={inputCls} />
+                            </div>
+                            <div>
+                                <label className={labelCls}>Описание компании</label>
+                                <textarea rows="3" value={companyDescription} onChange={e => setCompanyDescription(e.target.value)} placeholder="Чем занимается ваша компания..." className={inputCls}></textarea>
+                            </div>
+                        </>
                     )}
+
                     <div>
-                        <label className={labelCls}>О себе / Описание услуг</label>
-                        <textarea rows="4" value={bio} onChange={e => setBio(e.target.value)} placeholder={role === 'specialist' ? 'Расскажите о своих навыках и опыте...' : 'Расскажите о вашей компании...'} className={inputCls}></textarea>
+                        <label className={labelCls}>{role === 'specialist' ? 'О себе / Описание услуг' : 'О себе'}</label>
+                        <textarea rows="4" value={bio} onChange={e => setBio(e.target.value)} placeholder={role === 'specialist' ? 'Расскажите о своих навыках и опыте...' : 'Расскажите немного о себе...'} className={inputCls}></textarea>
                     </div>
                     <button type="submit" className={`${btnPrimary} w-full`}>Сохранить изменения</button>
                 </form>
+
+                {/* Telegram Settings */}
+                <div className="mt-8 pt-8 border-t border-border">
+                    <TelegramSettings />
+                </div>
             </div>
 
             {/* Deposit Modal */}

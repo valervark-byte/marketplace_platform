@@ -23,7 +23,9 @@ const Feed = () => {
     const [categoryFilter, setCategoryFilter] = useState('');
     const [searchInput, setSearchInput] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
-    const [cityFilter, setCityFilter] = useState('');
+    const [cityInput, setCityInput] = useState('');   // то, что печатает пользователь
+    const [cityFilter, setCityFilter] = useState(''); // применяемое к запросу (с задержкой)
+    const [cityOptions, setCityOptions] = useState(CITIES); // статичный список + города из задач
     const [remoteOnly, setRemoteOnly] = useState(false);
     const [viewMode, setViewMode] = useState('list'); // 'list' or 'map'
     const [sortBy, setSortBy] = useState('new');
@@ -143,6 +145,12 @@ const Feed = () => {
         return () => clearTimeout(t);
     }, [searchInput]);
 
+    // То же для города: применяем фильтр с задержкой, чтобы не дёргать API на каждую букву
+    useEffect(() => {
+        const t = setTimeout(() => setCityFilter(cityInput.trim()), 400);
+        return () => clearTimeout(t);
+    }, [cityInput]);
+
     useEffect(() => {
         fetchTasks();
     }, [categoryFilter, searchQuery, cityFilter, remoteOnly, statusFilter, sortBy, budgetMin, budgetMax, deadlineDays, newOnly, hasResponses]);
@@ -151,6 +159,16 @@ const Feed = () => {
     useEffect(() => {
         fetchUnread();
     }, [token]);
+
+    // Города для фильтра: статичный список + реально используемые (в т.ч. введённые вручную)
+    useEffect(() => {
+        api.get('/tasks/cities')
+            .then(res => {
+                const merged = Array.from(new Set([...CITIES, ...(res.data.cities || [])])).sort((a, b) => a.localeCompare(b, 'ru'));
+                setCityOptions(merged);
+            })
+            .catch(() => {});
+    }, []);
 
     // Живой бейдж: периодически обновляем счётчики, пока чат закрыт и вкладка активна
     useEffect(() => {
@@ -338,11 +356,23 @@ const Feed = () => {
                         </button>
                     </form>
 
-                    <div className="mt-5 flex flex-wrap gap-2 justify-center">
-                        <button onClick={() => setCategoryFilter('')} className={chipCls(categoryFilter === '')}>Все</button>
-                        {CATEGORIES.slice(0, 5).map(cat => (
-                            <button key={cat.value} onClick={() => setCategoryFilter(cat.value)} className={chipCls(categoryFilter === cat.value)}>
-                                {cat.label}
+                    {/* Категории — прокручиваемые на мобиле, все видимые на десктопе */}
+                    <div className="mt-5 flex flex-wrap gap-2 justify-center max-w-4xl mx-auto">
+                        <button
+                            onClick={() => setCategoryFilter('')}
+                            className={`${chipCls(categoryFilter === '')} flex items-center gap-1.5 whitespace-nowrap`}
+                        >
+                            <span className="text-base">✨</span>
+                            <span className="font-bold text-xs uppercase tracking-wide">ВСЕ</span>
+                        </button>
+                        {CATEGORIES.map(cat => (
+                            <button
+                                key={cat.value}
+                                onClick={() => setCategoryFilter(cat.value)}
+                                className={`${chipCls(categoryFilter === cat.value)} flex items-center gap-1.5 whitespace-nowrap`}
+                            >
+                                <span className="text-base">{cat.label.split(' ')[0]}</span>
+                                <span className="font-bold text-xs uppercase tracking-wide hidden sm:inline">{cat.label.split(' ').slice(1).join(' ')}</span>
                             </button>
                         ))}
                     </div>
@@ -353,12 +383,13 @@ const Feed = () => {
                 </div>
             </section>
 
-            {/* FILTERS — все элементы одной высоты на одной линии */}
+            {/* FILTERS — адаптивная сетка */}
             <section className="border-b border-border bg-surface/60 backdrop-blur-sm">
                 <div className="max-w-6xl mx-auto px-4 md:px-8 py-5">
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-[1fr_1fr_auto_auto] gap-3 items-center mb-3">
+                    {/* Основные фильтры — 2 колонки на мобиле, 3-4 на десктопе */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
                         <select
-                            className="h-[50px] w-full rounded-xl border border-border bg-surface-2 text-ink px-3 font-semibold outline-none focus:border-accent transition cursor-pointer"
+                            className="h-[50px] w-full rounded-xl border border-border bg-surface-2 text-ink px-3 text-sm font-semibold outline-none focus:border-accent transition cursor-pointer"
                             value={categoryFilter}
                             onChange={(e) => setCategoryFilter(e.target.value)}
                         >
@@ -367,57 +398,80 @@ const Feed = () => {
                                 <option key={cat.value} value={cat.value}>{cat.label}</option>
                             ))}
                         </select>
+
+                        <div className="relative">
+                            <input
+                                type="text"
+                                list="feed-city-options"
+                                placeholder="Город"
+                                className="h-[50px] w-full rounded-xl border border-border bg-surface-2 text-ink px-3 pr-8 text-sm font-semibold outline-none focus:border-accent transition"
+                                value={cityInput}
+                                onChange={(e) => setCityInput(e.target.value)}
+                            />
+                            <datalist id="feed-city-options">
+                                {cityOptions.map(c => (
+                                    <option key={c} value={c} />
+                                ))}
+                            </datalist>
+                            {cityInput && (
+                                <button
+                                    type="button"
+                                    onClick={() => { setCityInput(''); setCityFilter(''); }}
+                                    title="Сбросить город"
+                                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted hover:text-ink font-bold text-lg leading-none"
+                                >×</button>
+                            )}
+                        </div>
+
                         <select
-                            className="h-[50px] w-full rounded-xl border border-border bg-surface-2 text-ink px-3 font-semibold outline-none focus:border-accent transition cursor-pointer"
-                            value={cityFilter}
-                            onChange={(e) => setCityFilter(e.target.value)}
+                            className="h-[50px] w-full rounded-xl border border-border bg-surface-2 text-ink px-3 text-sm font-semibold outline-none focus:border-accent transition cursor-pointer"
+                            value={statusFilter}
+                            onChange={(e) => setStatusFilter(e.target.value)}
                         >
-                            <option value="">Все города</option>
-                            {CITIES.map(c => (
-                                <option key={c} value={c}>{c}</option>
-                            ))}
+                            <option value="">Все статусы</option>
+                            <option value="open">Открытые</option>
+                            <option value="in_progress">В работе</option>
+                            <option value="completed">Завершённые</option>
                         </select>
-                        <label className="h-[50px] flex items-center gap-3 rounded-xl border border-border bg-surface-2 px-4 cursor-pointer select-none transition hover:border-border-bright">
+
+                        <select
+                            className="h-[50px] w-full rounded-xl border border-border bg-surface-2 text-ink px-3 text-sm font-semibold outline-none focus:border-accent transition cursor-pointer"
+                            value={sortBy}
+                            onChange={(e) => setSortBy(e.target.value)}
+                        >
+                            <option value="new">Сначала новые</option>
+                            <option value="old">Сначала старые</option>
+                            <option value="budget_desc">Бюджет ↓</option>
+                            <option value="budget_asc">Бюджет ↑</option>
+                        </select>
+                    </div>
+
+                    {/* Чекбокс и переключатели вида */}
+                    <div className="flex flex-wrap gap-3 items-center">
+                        <label className="h-[42px] flex items-center gap-2 rounded-xl border border-border bg-surface-2 px-3 cursor-pointer select-none transition hover:border-border-bright">
                             <input
                                 type="checkbox"
                                 checked={remoteOnly}
                                 onChange={(e) => setRemoteOnly(e.target.checked)}
-                                className="w-5 h-5 accent-accent"
+                                className="w-4 h-4 accent-accent"
                             />
-                            <span className="font-bold text-sm whitespace-nowrap">🌐 Только удалённые</span>
+                            <span className="font-semibold text-xs whitespace-nowrap">🌐 Удалённо</span>
                         </label>
-                        <div className="flex gap-3 items-stretch flex-wrap">
-                            <select
-                                className="h-[50px] flex-1 min-w-[130px] lg:flex-none rounded-xl border border-border bg-surface-2 text-ink px-3 font-semibold outline-none focus:border-accent transition cursor-pointer"
-                                value={statusFilter}
-                                onChange={(e) => setStatusFilter(e.target.value)}
-                            >
-                                <option value="">Все статусы</option>
-                                <option value="open">Открытые</option>
-                                <option value="in_progress">В работе</option>
-                                <option value="completed">Завершённые</option>
-                            </select>
-                            <select
-                                className="h-[50px] flex-1 min-w-[130px] lg:flex-none rounded-xl border border-border bg-surface-2 text-ink px-3 font-semibold outline-none focus:border-accent transition cursor-pointer"
-                                value={sortBy}
-                                onChange={(e) => setSortBy(e.target.value)}
-                            >
-                                <option value="new">Сначала новые</option>
-                                <option value="old">Сначала старые</option>
-                                <option value="budget_desc">Бюджет ↓</option>
-                                <option value="budget_asc">Бюджет ↑</option>
-                            </select>
+
+                        <div className="flex gap-2">
                             <button
                                 onClick={() => setViewMode('list')}
-                                className={`h-[50px] flex-1 lg:flex-none px-4 rounded-xl border font-display text-[11px] uppercase tracking-wider transition ${viewMode === 'list' ? 'bg-accent text-white border-accent' : 'bg-surface-2 text-muted border-border hover:text-ink hover:border-border-bright'}`}
+                                className={`h-[42px] px-4 rounded-xl border font-semibold text-xs uppercase tracking-wide transition flex items-center gap-1.5 ${viewMode === 'list' ? 'bg-accent text-white border-accent' : 'bg-surface-2 text-muted border-border hover:text-ink hover:border-border-bright'}`}
                             >
-                                📋 Список
+                                <span className="text-base">📋</span>
+                                <span className="hidden sm:inline">Список</span>
                             </button>
                             <button
                                 onClick={() => setViewMode('map')}
-                                className={`h-[50px] flex-1 lg:flex-none px-4 rounded-xl border font-display text-[11px] uppercase tracking-wider transition ${viewMode === 'map' ? 'bg-accent text-white border-accent' : 'bg-surface-2 text-muted border-border hover:text-ink hover:border-border-bright'}`}
+                                className={`h-[42px] px-4 rounded-xl border font-semibold text-xs uppercase tracking-wide transition flex items-center gap-1.5 ${viewMode === 'map' ? 'bg-accent text-white border-accent' : 'bg-surface-2 text-muted border-border hover:text-ink hover:border-border-bright'}`}
                             >
-                                🗺 Карта
+                                <span className="text-base">🗺️</span>
+                                <span className="hidden sm:inline">Карта</span>
                             </button>
                         </div>
                     </div>
@@ -515,6 +569,7 @@ const Feed = () => {
                     <div className="rounded-2xl border border-border overflow-hidden h-[600px]">
                         <TaskMap
                             tasks={tasks}
+                            city={cityFilter}
                             onTaskClick={(taskId) => {
                                 const task = tasks.find(t => t.id === taskId);
                                 if (task && role === 'specialist' && task.status === 'open') {
