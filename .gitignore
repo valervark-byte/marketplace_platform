@@ -13,6 +13,8 @@ venv/
 
 # Базы данных и загруженные файлы (не для GitHub)
 *.db
+*.db-shm
+*.db-wal
 backend/uploads/
 
 # Секреты и локальное
